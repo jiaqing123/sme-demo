@@ -66,6 +66,7 @@ There are no administrators. All users are peers; the demo has exactly one.
 | `issuer-mock` | Stand-in card issuer. Serves card transactions over HTTP. | none (in-memory fixture) | 8084 |
 | `sms-mock` | Stand-in SMS provider. Accepts a send request and logs it. | none | 8083 |
 | `mssql` | SQL Server 2022. Hosts `sme_auth` and `sme_api`. | `mssql-data` volume | internal 1433 |
+| `db-migrator` | One-shot. Applies idempotent schema scripts, then exits. | `__EFMigrationsHistory` in both databases | none |
 | `azurite` | Azure Storage emulator. Table for the transaction feed, blob container for card artwork. | `azurite-data` volume | internal 10000, 10002 |
 
 Only `web`, `auth`, `api`, `sms-mock`, and `issuer-mock` publish host ports.
@@ -172,7 +173,7 @@ DTO mapped by AutoMapper → `Results.Ok` or a `ProblemDetails` result.
 
 ### 5.6 Container and resource footprint
 
-Seven containers. Approximate steady-state memory:
+Eight containers, one of which is a one-shot migrator. Approximate steady-state memory:
 
 | Container | Memory | Notes |
 |-----------|--------|-------|
@@ -473,6 +474,93 @@ rounds to zero here.
 The mock issuer serves deterministic fixture data, so a reset always produces
 the same demo.
 
+### 8.8 Schema evolution
+
+Schema change is the most dangerous routine operation in a system like this, so
+it gets rules rather than habits.
+
+**Ownership first.** Each database is migrated only by the service that owns it:
+`auth` owns `sme_auth`, `api` owns `sme_api`. No migration touches another
+service's tables, and there are no cross-database foreign keys. A release of one
+service therefore never requires a coordinated change in the other. This is the
+single largest stability property in the design.
+
+**Migrations are code, applied as reviewable SQL.**
+
+- The schema is defined by EF Core migrations: one migration per logical change,
+  committed next to the entity change that caused it.
+- A migration reaches a database only through the **idempotent SQL script**
+  generated from it (`dotnet ef migrations script --idempotent`), never through
+  `Database.Migrate()` at application start-up.
+- Those scripts are committed artefacts (`migrations/auth.sql`,
+  `migrations/api.sql`) and baked into the `db-migrator` image. Reviewers read
+  SQL, not C# builder calls.
+- `db-migrator` runs once per `docker compose up`, before `auth` and `api`, and
+  exits. If it fails, nothing else starts.
+
+Migrating at start-up is rejected for four reasons: replicas race each other, a
+failed migration leaves a half-running app, the timing of the change is
+invisible to whoever is operating the system, and the application would need DDL
+rights it should not have. None of those problems is worth the convenience, even
+in a demo.
+
+**Rules that make a change safe.**
+
+| Rule | Why |
+|------|-----|
+| Migrations are append-only. An applied migration is never edited. | Editing history means two checkouts produce two schemas. |
+| Every change must be compatible with the previous release. | Old and new code overlap during a rolling deploy. |
+| Destructive changes ship in a later release than the code that stops using the column. | Dropping something still being read breaks the version still running. |
+| Backfills are separate from schema changes, batched, and restartable. | A long backfill inside a DDL transaction locks the table and cannot resume. |
+| Scripts are idempotent, with `IF NOT EXISTS` guards and the migration history table. | Re-running against a partially migrated database must be safe. |
+| `EnsureCreated()` is forbidden outside unit tests. | It bypasses migration history and forks the schema. |
+
+**Expand, then contract.** For anything non-trivial the sequence is: expand the
+schema so both code versions work, deploy code that writes both shapes, backfill,
+switch reads, and contract in a later release.
+
+| Change | Safe sequence |
+|--------|---------------|
+| Add a nullable column | One migration; old code ignores it. |
+| Add a NOT NULL column | Add nullable → backfill → add default and NOT NULL in a later migration. |
+| Rename a column | Add new → dual-write → backfill → switch reads → drop old, over three releases. |
+| Change a column type | Add new column → backfill → dual-write → switch → drop old. |
+| Drop a column or table | Stop reading it in release N, drop it in release N+1. |
+| Add a table or index | Straightforward; table sizes here make it instant. |
+
+At demo scale most of these collapse to a single step. The sequence is written
+down because the first real table will not be demo-sized.
+
+**What is verified before merge.**
+
+1. `dotnet ef migrations has-pending-model-changes` fails the build when an
+   entity changed without a matching migration.
+2. The scripts are applied to a **fresh** database and to a database restored
+   from the **previous release's schema**. The upgrade path matters more than
+   the empty path, and it is the one that is usually skipped.
+3. Integration tests run against the upgraded database.
+4. The generated script is scanned for `DROP`, `ALTER COLUMN`, and `DELETE`;
+   those pull in a second reviewer and a written reason.
+
+**Rollback policy.** Roll forward; do not roll back. `Down()` is written only for
+changes that are genuinely reversible, and destructive migrations have no down
+path — they rely on a backup taken beforehand and verified. In the demo,
+"rollback" is `docker compose down -v && docker compose up`, which is exact
+because all data is seeded.
+
+**Privileges.**
+
+| Principal | Rights | Used by |
+|-----------|--------|---------|
+| `sa` | full | Local container bootstrap only; never in an application connection string. |
+| `sme_migrator` | `db_owner` on both databases | `db-migrator` only. |
+| `sme_auth_app` | `db_datareader`, `db_datawriter` on `sme_auth` | `auth` |
+| `sme_api_app` | `db_datareader`, `db_datawriter` on `sme_api` | `api` |
+
+The application logins cannot create, alter, or drop anything. If the API is
+compromised, the blast radius is rows, not schema — and that is the difference
+between an incident and a very bad day.
+
 ## 9. Front-end
 
 ### 9.1 Stack
@@ -535,10 +623,11 @@ English only, `en-AU` formatting: `A$` currency symbol, `DD MMM YYYY` dates.
 | `sms-mock` | built from `tools/SmsMock` | 8083 | `GET /healthz` |
 | `issuer-mock` | built from `tools/IssuerMock` | 8084 | `GET /healthz` |
 | `mssql` | `mcr.microsoft.com/mssql/server:2022-latest` | none | `sqlcmd SELECT 1` |
+| `db-migrator` | built from `tools/Migrator` | none | exits 0 |
 | `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
-Startup ordering: `mssql` and `azurite` healthy → `auth` → `api`;
-`api` also waits for `issuer-mock` and `sms-mock`.
+Startup ordering: `mssql` healthy → `db-migrator` completes → `auth` → `api`;
+`api` also waits for `azurite`, `issuer-mock`, and `sms-mock`.
 
 ### 10.2 Compose profiles
 
@@ -571,6 +660,8 @@ is baked into an image.
 ### 10.4 Start, seed, reset
 
 - `docker compose up --build` builds and starts everything.
+- `db-migrator` applies the idempotent schema scripts, then exits; `auth` and
+  `api` start only after it succeeds.
 - Seed data is applied idempotently at start-up (one user, three cards, about
   40 transactions fetched from the mock issuer).
 - `docker compose down -v && docker compose up` returns the demo to its initial
@@ -610,8 +701,8 @@ Accepted for the demo, listed so nobody mistakes them for production:
 
 The demo is done when all of these hold on a clean machine:
 
-1. `docker compose up --build` brings all seven services healthy with no manual
-   steps.
+1. `docker compose up --build` starts everything, with the migrator completing
+   successfully, and no manual steps.
 2. `http://localhost:8080` loads the sign-in screen on a 360 px viewport without
    horizontal scrolling.
 3. Wrong password is rejected with a readable message; three wrong OTPs destroy
@@ -631,6 +722,11 @@ The demo is done when all of these hold on a clean machine:
     failure; it does not return 500 to the browser.
 12. `docker compose down -v && docker compose up` restores the identical demo,
     including the same seeded transactions.
+13. From empty volumes, migrations apply exactly once; a second
+    `docker compose up` reports nothing pending.
+14. `dotnet ef migrations has-pending-model-changes` passes on a clean checkout.
+15. The API's database login cannot execute DDL: `CREATE TABLE` fails with a
+    permission error.
 
 ## 13. Risks and decisions
 
@@ -673,6 +769,13 @@ without measuring on the actual demo hardware.
 The mock returns fixed fixtures keyed by card ID. If the fixtures ever change,
 the acceptance screenshots change too. Treat the fixture file as part of the
 demo contract.
+
+### 13.5 Schema change is the highest-risk routine operation
+
+The mitigations in §8.8 are mandatory, not aspirational. The two that actually
+prevent incidents are the upgrade-path test (previous schema plus new script, not
+just an empty database) and the privilege split (applications cannot execute
+DDL). Everything else is defence in depth.
 
 ## 14. Open questions
 
