@@ -561,6 +561,47 @@ The application logins cannot create, alter, or drop anything. If the API is
 compromised, the blast radius is rows, not schema — and that is the difference
 between an incident and a very bad day.
 
+### 8.9 Delivery pipeline shape
+
+The local `db-migrator` is a stand-in for what larger organisations run as a
+dedicated database pipeline. It is the same idea at two scales, and the pattern
+is worth naming.
+
+**Two families of schema tooling.**
+
+| Family | How it works | Examples |
+|--------|--------------|----------|
+| Migration-based (imperative) | Ordered, append-only change scripts applied in sequence; a ledger records what ran. | EF Core migrations, Flyway, Liquibase changelogs, DbUp |
+| State-based (declarative) | The desired schema is declared; the tool diffs it against the target and generates the change. | SSDT `.sqlproj` + DACPAC, Redgate SQL Compare |
+
+A "schema project" in a Microsoft shop is usually the state-based kind: a
+`.sqlproj` committed like code, built into a DACPAC, and published by a
+pipeline. That works well when the database is the primary artefact and several
+applications share it. It is a poor fit here, because EF Core already owns the
+model — keeping a `.sqlproj` beside it creates two sources of truth, and the
+drift between them surfaces at the worst possible moment.
+
+**What we adopt from the large-organisation pattern.**
+
+| Practice | Here |
+|----------|------|
+| Schema changes go through pull request, never ad-hoc access | Migrations are reviewed together with their generated SQL. |
+| A dedicated pipeline builds and applies the change, separate from the application deploy | The pipeline builds the migrator image and runs it; application deploys never carry DDL. |
+| The artefact is versioned and immutable | The migrator image is tagged per commit; the SQL scripts inside it are the reviewed artefact. |
+| Apply to a disposable database first, then to the target | Fresh database, plus an upgrade from the previous schema, in CI. |
+| The identity applying changes is not the identity serving traffic | Migrator login has `db_owner`; application logins do not. |
+
+**What we leave out, deliberately.** Multi-environment promotion
+(dev → staging → prod) with manual DBA gates, drift detection against
+production, and a separate schema repository. Each exists to coordinate many
+teams and many databases. One demo and one database do not need them, and the
+ceremony would hide the parts that matter.
+
+**If the demo grows up.** The artefact is plain SQL, so the runner can be
+swapped for Flyway or Liquibase without touching the application. What must be
+kept is the boundary: the app never applies schema changes, and every change has
+a reviewed script with a recorded version.
+
 ## 9. Front-end
 
 ### 9.1 Stack
