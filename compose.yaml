@@ -20,12 +20,12 @@ services:
     networks:
       - sme
 
-  # One-shot. Applies db/migrations to the database, then exits. Nothing else
-  # starts until it succeeds.
+  # One-shot. Applies db/migrations/api to the API database, then exits.
   db-migrator:
     build:
       context: .
       dockerfile: tools/Migrator/Dockerfile
+    image: sme-demo-migrator:local
     environment:
       DATABASE_URL: "Server=mssql;Database=sme_api;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
       MIGRATIONS_PATH: /app/migrations/api
@@ -37,9 +37,70 @@ services:
     networks:
       - sme
 
+  # One-shot. Applies db/migrations/auth to the auth database, then exits.
+  # Reuses the generic migrator image with an auth-specific path and DSN.
+  db-migrator-auth:
+    build:
+      context: .
+      dockerfile: tools/Migrator/Dockerfile
+    image: sme-demo-migrator:local
+    environment:
+      DATABASE_URL: "Server=mssql;Database=sme_auth;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      MIGRATIONS_PATH: /app/migrations/auth
+      DB_WAIT_SECONDS: "120"
+    depends_on:
+      mssql:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - sme
+
+  auth:
+    build:
+      context: .
+      dockerfile: src/SmeDemo.Auth/Dockerfile
+    image: sme-demo-auth:local
+    environment:
+      ASPNETCORE_URLS: "http://+:8081"
+      DATABASE_URL: "Server=mssql;Database=sme_auth;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      ORG_ID: "${ORG_ID:-sme}"
+      DEMO_MODE: "${DEMO_MODE:-true}"
+      DEMO_USERNAME: "${DEMO_USERNAME:-demo}"
+      DEMO_PASSWORD: "${DEMO_PASSWORD:-Demo_Passw0rd!}"
+      DEMO_PHONE: "${DEMO_PHONE:-+61400000000}"
+      DEMO_OTP: "${DEMO_OTP-123456}"
+      JWT_ISSUER: "${JWT_ISSUER:-http://auth:8081}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE:-sme-demo-api}"
+      JWT_TTL: "${JWT_TTL:-30m}"
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
+      SMS_PROVIDER_URL: "${SMS_PROVIDER_URL:-}"
+      # Consumed by the resource API when it lands; recorded here per §10.3.
+      AUTH_METADATA_URL: "http://auth:8081/.well-known/openid-configuration"
+      JWKS_URL: "http://auth:8081/.well-known/jwks.json"
+    ports:
+      - "8081:8081"
+    volumes:
+      - auth-keys:/keys
+    depends_on:
+      mssql:
+        condition: service_healthy
+      db-migrator-auth:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -fsS http://localhost:8081/healthz || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - sme
+
 networks:
   sme:
     driver: bridge
 
 volumes:
   mssql-data:
+  auth-keys:

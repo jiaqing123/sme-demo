@@ -1,10 +1,12 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/SmeDemo.Auth/SmeDemo.Auth.csproj" />
     <Project Path="src/SmeDemo.Domain/SmeDemo.Domain.csproj" />
     <Project Path="src/SmeDemo.Infrastructure/SmeDemo.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Migrator.Tests/Migrator.Tests.csproj" />
+    <Project Path="tests/SmeDemo.Auth.Tests/SmeDemo.Auth.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/" />
   <Folder Name="/tools/Migrator/">

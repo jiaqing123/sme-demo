@@ -1,0 +1,194 @@
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using SmeDemo.Auth.Challenges;
+using SmeDemo.Auth.Configuration;
+using SmeDemo.Auth.Contracts;
+using SmeDemo.Auth.Errors;
+using SmeDemo.Auth.Persistence;
+using SmeDemo.Auth.Security;
+using SmeDemo.Auth.Sms;
+
+namespace SmeDemo.Auth.Services;
+
+/// <summary>
+/// The login, verify and resend use cases. Endpoints only bind and translate the
+/// result; all flow logic lives here.
+/// </summary>
+public sealed class AuthFlowService
+{
+    private readonly AuthDbContext _db;
+    private readonly ChallengeStore _challenges;
+    private readonly IPasswordHasher<AuthUser> _passwordHasher;
+    private readonly JwtTokenIssuer _tokenIssuer;
+    private readonly ISmsProvider _smsProvider;
+    private readonly AuthOptions _options;
+    private readonly ILogger<AuthFlowService> _logger;
+
+    public AuthFlowService(
+        AuthDbContext db,
+        ChallengeStore challenges,
+        IPasswordHasher<AuthUser> passwordHasher,
+        JwtTokenIssuer tokenIssuer,
+        ISmsProvider smsProvider,
+        AuthOptions options,
+        ILogger<AuthFlowService> logger)
+    {
+        _db = db;
+        _challenges = challenges;
+        _passwordHasher = passwordHasher;
+        _tokenIssuer = tokenIssuer;
+        _smsProvider = smsProvider;
+        _options = options;
+        _logger = logger;
+    }
+
+    public async Task<OperationResult<ChallengeResponse>> LoginAsync(
+        LoginRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (RequestValidation.Validate(request) is { } validationErrors)
+        {
+            return OperationResult<ChallengeResponse>.Failure(ApiProblem.Validation(validationErrors));
+        }
+
+        var username = request.Username!.Trim();
+        var user = await FindUserAsync(username, cancellationToken);
+
+        // In demo mode only the configured username is accepted. The password is
+        // still checked against the seeded PBKDF2 hash, never against plaintext.
+        if (_options.DemoMode &&
+            !string.Equals(username, _options.DemoUsername, StringComparison.Ordinal))
+        {
+            user = null;
+        }
+
+        if (user is null || !user.IsActive ||
+            _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password!) ==
+            PasswordVerificationResult.Failed)
+        {
+            _logger.LogWarning("Login rejected.");
+            return OperationResult<ChallengeResponse>.Failure(
+                ApiProblem.Unauthenticated("The username or password is incorrect."));
+        }
+
+        var code = _options.DemoMode ? _options.DemoOtp : GenerateCode();
+        var ticket = _challenges.Create(user.Id, code);
+        await SendCodeAsync(user.Phone, code, cancellationToken);
+
+        return OperationResult<ChallengeResponse>.Success(
+            new ChallengeResponse(
+                ticket.Id.ToString(),
+                (int)Math.Ceiling(ticket.ExpiresIn.TotalSeconds),
+                (int)Math.Ceiling(ticket.ResendIn.TotalSeconds)));
+    }
+
+    public async Task<OperationResult<TokenResponse>> VerifyAsync(
+        string challengeId,
+        VerifyRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (RequestValidation.Validate(request) is { } validationErrors)
+        {
+            return OperationResult<TokenResponse>.Failure(ApiProblem.Validation(validationErrors));
+        }
+
+        if (!Guid.TryParse(challengeId, out var id))
+        {
+            return OperationResult<TokenResponse>.Failure(
+                ApiProblem.Unauthenticated("The challenge is no longer valid."));
+        }
+
+        var verification = _challenges.Verify(id, request.Code!);
+
+        switch (verification.Outcome)
+        {
+            case ChallengeVerificationOutcome.Success:
+                break;
+            case ChallengeVerificationOutcome.InvalidCode:
+                return OperationResult<TokenResponse>.Failure(
+                    ApiProblem.Unauthenticated("The verification code is incorrect."));
+            case ChallengeVerificationOutcome.TooManyAttempts:
+                return OperationResult<TokenResponse>.Failure(
+                    ApiProblem.RateLimited("Too many verification attempts. Request a new code."));
+            case ChallengeVerificationOutcome.NotFound:
+            case ChallengeVerificationOutcome.Expired:
+            default:
+                return OperationResult<TokenResponse>.Failure(
+                    ApiProblem.Unauthenticated("The challenge has expired or is no longer valid."));
+        }
+
+        var user = await _db.Users.AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == verification.UserId, cancellationToken);
+
+        if (user is null || !user.IsActive)
+        {
+            return OperationResult<TokenResponse>.Failure(
+                ApiProblem.Unauthenticated("The account is not available."));
+        }
+
+        var token = _tokenIssuer.Issue(user);
+
+        return OperationResult<TokenResponse>.Success(
+            new TokenResponse(token.AccessToken, "Bearer", token.ExpiresIn));
+    }
+
+    public async Task<OperationResult<ChallengeResponse>> ResendAsync(
+        string challengeId,
+        CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(challengeId, out var id))
+        {
+            return OperationResult<ChallengeResponse>.Failure(
+                ApiProblem.Unauthenticated("The challenge is no longer valid."));
+        }
+
+        var code = _options.DemoMode ? _options.DemoOtp : GenerateCode();
+        var result = _challenges.Resend(id, code);
+
+        switch (result.Outcome)
+        {
+            case ChallengeResendOutcome.Success:
+                break;
+            case ChallengeResendOutcome.Cooldown:
+                return OperationResult<ChallengeResponse>.Failure(
+                    ApiProblem.RateLimited(
+                        $"Wait {Math.Ceiling(result.RetryAfter.TotalSeconds)} seconds before resending."));
+            case ChallengeResendOutcome.NotFound:
+            case ChallengeResendOutcome.Expired:
+            default:
+                return OperationResult<ChallengeResponse>.Failure(
+                    ApiProblem.Unauthenticated("The challenge has expired or is no longer valid."));
+        }
+
+        var user = await _db.Users.AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Id == result.UserId, cancellationToken);
+
+        if (user is null || !user.IsActive)
+        {
+            return OperationResult<ChallengeResponse>.Failure(
+                ApiProblem.Unauthenticated("The account is not available."));
+        }
+
+        await SendCodeAsync(user.Phone, result.Code!, cancellationToken);
+
+        return OperationResult<ChallengeResponse>.Success(
+            new ChallengeResponse(
+                id.ToString(),
+                (int)Math.Ceiling(result.ExpiresIn.TotalSeconds),
+                (int)Math.Ceiling(result.RetryAfter.TotalSeconds)));
+    }
+
+    private async Task<AuthUser?> FindUserAsync(string username, CancellationToken cancellationToken) =>
+        await _db.Users.AsNoTracking()
+            .SingleOrDefaultAsync(candidate => candidate.Username == username, cancellationToken);
+
+    private async Task SendCodeAsync(string phoneNumber, string code, CancellationToken cancellationToken)
+    {
+        var message = $"Your SME Demo verification code is {code}. It expires in 5 minutes.";
+        await _smsProvider.Send(phoneNumber, message, cancellationToken);
+    }
+
+    private static string GenerateCode() =>
+        RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6", System.Globalization.CultureInfo.InvariantCulture);
+}

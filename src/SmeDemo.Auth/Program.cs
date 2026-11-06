@@ -1,0 +1,79 @@
+using Microsoft.AspNetCore.Identity;
+using Microsoft.EntityFrameworkCore;
+using SmeDemo.Auth.Challenges;
+using SmeDemo.Auth.Configuration;
+using SmeDemo.Auth.Endpoints;
+using SmeDemo.Auth.Errors;
+using SmeDemo.Auth.Persistence;
+using SmeDemo.Auth.Security;
+using SmeDemo.Auth.Services;
+using SmeDemo.Auth.Sms;
+
+var builder = WebApplication.CreateBuilder(args);
+var options = AuthOptions.FromEnvironment();
+
+// Build the signing key at start-up so a bad key volume fails the container,
+// not the first login.
+var signingKeys = new SigningKeyStore(options.KeysPath);
+
+builder.Services.AddSingleton(options);
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(signingKeys);
+builder.Services.AddSingleton<JwtTokenIssuer>();
+builder.Services.AddSingleton<ChallengeStore>();
+builder.Services.AddSingleton<IPasswordHasher<AuthUser>, PasswordHasher<AuthUser>>();
+builder.Services.AddScoped<AuthFlowService>();
+builder.Services.AddDbContext<AuthDbContext>(db => db.UseSqlServer(options.DatabaseUrl));
+
+if (options.SmsProviderUrl is null)
+{
+    builder.Services.AddSingleton<ISmsProvider, LoggingSmsProvider>();
+}
+else
+{
+    builder.Services.AddHttpClient<ISmsProvider, HttpSmsProvider>(
+        client => client.Timeout = TimeSpan.FromSeconds(10));
+}
+
+builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
+    .WithOrigins(options.CorsOrigin)
+    .AllowAnyHeader()
+    .AllowAnyMethod()));
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+
+// Minimal APIs reject malformed JSON with an empty 400 before the exception
+// handler sees it. Give that response the same VALIDATION_ERROR envelope as a
+// validator failure.
+app.UseStatusCodePages(async statusCodeContext =>
+{
+    var response = statusCodeContext.HttpContext.Response;
+    if (response.StatusCode != StatusCodes.Status400BadRequest)
+    {
+        return;
+    }
+
+    var problem = ApiProblem.Validation(new Dictionary<string, string[]>
+    {
+        ["body"] = ["The request body could not be read."],
+    });
+
+    await response.WriteAsJsonAsync(
+        problem.ToProblemDetails(),
+        options: null,
+        contentType: "application/problem+json");
+});
+
+app.UseCors();
+
+await AuthDbSeeder.SeedAsync(app.Services, options, CancellationToken.None);
+
+app.MapAuthEndpoints();
+app.Run();
+
+public partial class Program;

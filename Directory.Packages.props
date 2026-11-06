@@ -23,6 +23,10 @@
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.7" />
   </ItemGroup>
 
+  <ItemGroup Label="Authentication">
+    <PackageVersion Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Testing">
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
     <PackageVersion Include="MSTest.TestAdapter" Version="4.5.2" />
