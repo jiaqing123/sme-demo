@@ -1,8 +1,11 @@
 # SME Demo — System Requirements & Architecture
 
-- **Status:** Draft v0.2
+- **Status:** Draft v0.3
 - **Owner:** Architecture
 - **Last updated:** 2026-11-06
+- **Changes in v0.3:** the transaction feed moved to Azure Table Storage via
+  Azurite; Cosmos DB deferred behind the same port; licensing notes extracted
+  to [`licensing.md`](licensing.md).
 - **Changes in v0.2:** ASP.NET Core implementation stack, three-tier layering,
   MediatR/AutoMapper, MSSQL + Cosmos DB + Azure Storage, separate JWT issuer
   container, mock issuer integration.
@@ -59,12 +62,11 @@ There are no administrators. All users are peers; the demo has exactly one.
 |-----------|----------------|------------------|------|
 | `web` | React SPA, mobile-first wallet UI. Static assets served by nginx. | none | 8080 |
 | `auth` | Credential check, OTP challenge, JWT issuance, OIDC-style discovery and JWKS. | MSSQL `sme_auth`, signing keys volume | 8081 |
-| `api` | Resource server. Verifies JWTs, serves profile, cards, transactions, card art. | MSSQL `sme_api`, Cosmos DB, Blob | 8082 |
+| `api` | Resource server. Verifies JWTs, serves profile, cards, transactions, card art. | MSSQL `sme_api`, Table + Blob storage | 8082 |
 | `issuer-mock` | Stand-in card issuer. Serves card transactions over HTTP. | none (in-memory fixture) | 8084 |
 | `sms-mock` | Stand-in SMS provider. Accepts a send request and logs it. | none | 8083 |
 | `mssql` | SQL Server 2022. Hosts `sme_auth` and `sme_api`. | `mssql-data` volume | internal 1433 |
-| `cosmos` | Azure Cosmos DB emulator. Stores the transaction feed. | `cosmos-data` volume | internal 8081 |
-| `azurite` | Azure Storage emulator. Stores card artwork. | `azurite-data` volume | internal 10000 |
+| `azurite` | Azure Storage emulator. Table for the transaction feed, blob container for card artwork. | `azurite-data` volume | internal 10000, 10002 |
 
 Only `web`, `auth`, `api`, `sms-mock`, and `issuer-mock` publish host ports.
 Database and storage containers are reachable only on the Compose network.
@@ -78,8 +80,8 @@ flowchart LR
     B -->|"GET /api/v1/* + Bearer JWT"| P[api :8082]
     A -->|"users, password hashes"| M[(mssql)]
     P -->|"cards, sync state"| M
-    P -->|"transactions"| C[(cosmos)]
-    P -->|"card art"| Z[(azurite)]
+    P -->|"transactions"| T[(azurite: tables)]
+    P -->|"card art"| Z[(azurite: blobs)]
     P -->|"GET transactions"| I[issuer-mock :8084]
     A -->|"JWKS"| P
     A -->|"POST /messages"| S[sms-mock :8083]
@@ -110,7 +112,7 @@ key.
 | Object mapping | AutoMapper (free version pinned — see §13.2) |
 | Validation | FluentValidation (Apache-2.0, current stable) + a MediatR pipeline behaviour |
 | Persistence (relational) | EF Core 10 + `Microsoft.EntityFrameworkCore.SqlServer` |
-| Persistence (documents) | `Microsoft.Azure.Cosmos` |
+| Persistence (transaction feed) | `Azure.Data.Tables` against Azurite |
 | Blob storage | `Azure.Storage.Blobs` |
 | Outbound HTTP | `IHttpClientFactory` + `Microsoft.Extensions.Http.Resilience` |
 | Authentication | `Microsoft.AspNetCore.Authentication.JwtBearer` |
@@ -139,7 +141,7 @@ src/
   SmeDemo.Api/              presentation: endpoints, auth wiring, composition root
   SmeDemo.Application/      use cases: MediatR handlers, DTOs, profiles, port interfaces
   SmeDemo.Domain/           entities, value objects, domain errors
-  SmeDemo.Infrastructure/   adapters: EF Core, Cosmos, Blob, issuer HTTP client
+  SmeDemo.Infrastructure/   adapters: EF Core, Table Storage, Blob, issuer HTTP client
   SmeDemo.Auth/             independent JWT issuer service, own project and Dockerfile
 tests/
   SmeDemo.Application.Tests/
@@ -151,7 +153,7 @@ The rules that make "thin endpoints" mean something:
 | Rule | Enforcement |
 |------|-------------|
 | An endpoint may only bind input, call `ISender.Send`, and map the result to HTTP. | Code review; the `Api` project has no reference to `Infrastructure`. |
-| No `DbContext`, `CosmosClient`, `BlobClient`, or `HttpClient` in `Api`. | Project references make it impossible to compile. |
+| No `DbContext`, `TableClient`, `BlobClient`, or `HttpClient` in `Api`. | Project references make it impossible to compile. |
 | No business rules in handlers that belong to entities. | Domain project owns invariants; handlers orchestrate. |
 | Every third-party dependency is behind an interface declared in `Application`. | Adapters live in `Infrastructure` and are registered in the composition root. |
 | Cross-cutting concerns are pipeline behaviours, not repeated code. | Logging, validation, and timing behaviours in `Application`. |
@@ -170,22 +172,21 @@ DTO mapped by AutoMapper → `Results.Ok` or a `ProblemDetails` result.
 
 ### 5.6 Container and resource footprint
 
-Eight containers. Approximate steady-state memory:
+Seven containers. Approximate steady-state memory:
 
 | Container | Memory | Notes |
 |-----------|--------|-------|
 | `mssql` | ~2 GB | SQL Server 2022 Developer image. |
-| `cosmos` | 2–4 GB | Emulator; 4 GB recommended, slow first start. |
-| `azurite` | ~150 MB | |
+| `azurite` | ~250 MB | Blob and table endpoints. |
 | `web` | ~50 MB | nginx + static assets. |
 | `auth` | ~200 MB | |
 | `api` | ~250 MB | |
 | `issuer-mock` | ~150 MB | |
 | `sms-mock` | ~150 MB | |
-| **Total** | **~6–7 GB** | Docker Desktop memory should be raised to ≥ 10 GB. |
+| **Total** | **~3 GB** | Docker Desktop memory of 4 GB is enough; 8 GB is comfortable. |
 
-This is the main cost of the "all stores in Docker" requirement, and it is
-called out in §13.
+The MSSQL container dominates this. The Cosmos emulator was the real cost, and
+dropping it is what keeps the demo runnable on an ordinary laptop (see §8.6).
 
 ## 6. Authentication
 
@@ -346,15 +347,16 @@ Validation failures additionally carry a per-field dictionary:
 | `INVALID_TOKEN` | 401 | Signature, `iss`, or `aud` mismatch. |
 | `FORBIDDEN` | 403 | Token valid but org mismatch or resource not owned. |
 | `NOT_FOUND` | 404 | Unknown card ID. |
-| `UPSTREAM_UNAVAILABLE` | 503 | Issuer or storage unavailable after retries. |
+| `UPSTREAM_UNAVAILABLE` | 503 | A required store is unavailable after retries. |
 | `RATE_LIMITED` | 429 | Too many OTP attempts or sends. |
 | `INTERNAL` | 500 | Unhandled failure. |
 
 ### 7.3 Pagination
 
-Cursor-based, `limit` default 20, maximum 100. The Cosmos continuation token is
-wrapped as an opaque base64url string, so the contract does not leak the store's
-cursor format. `next_cursor` is `null` on the last page. No total counts.
+Cursor-based, `limit` default 20, maximum 100. The cursor is the store's row key,
+base64url-wrapped, so the contract does not leak the storage layout and the
+client never constructs one. `next_cursor` is `null` on the last page. No total
+counts.
 
 ## 8. Data model
 
@@ -364,7 +366,7 @@ cursor format. `next_cursor` is `null` on the last page. No total counts.
 |-------|------|-----|
 | MSSQL `sme_auth` | users, password hashes | Relational, transactional, written only by `auth`. |
 | MSSQL `sme_api` | cards, issuer sync state | Small, relational, joined on demand. |
-| Cosmos DB `transactions` | transaction documents | Append-only, issuer-shaped, queried per card. |
+| Table `transactions` | the transaction feed | Append-only, per-card, ordered by row key. |
 | Blob `card-art` | card artwork images | Binary assets, not queryable. |
 
 There is no dual write. Each fact has exactly one home, and only `api` reads
@@ -411,45 +413,53 @@ more than one store.
 This is the only table that records integration state, and it is what makes the
 issuer dependency visible rather than implicit.
 
-### 8.5 `transactions` (Cosmos DB)
+### 8.5 `transactions` (Table Storage)
 
-Partition key `/cardId`. Document body:
+One table, `transactions`. Table Storage has no secondary indexes and no
+cross-partition ordering, so the key design carries the query:
 
-```json
-{
-  "id": "txn_01J...",
-  "cardId": "8b1f...",
-  "orgId": "sme",
-  "amountMinor": 1240,
-  "currency": "AUD",
-  "direction": "debit",
-  "merchant": "Southbank Coffee",
-  "status": "posted",
-  "occurredAt": "2026-11-02T08:14:00Z",
-  "postedAt": "2026-11-02T08:15:00Z",
-  "issuerPayload": { },
-  "ingestedAt": "2026-11-02T09:00:00Z"
-}
+| Key | Value | Why |
+|-----|-------|-----|
+| `PartitionKey` | card ID | Every read is scoped to one card. |
+| `RowKey` | `{reverseTicks:D19}_{transactionId}` | Ascending order on a zero-padded reversed tick count equals newest-first; the ID breaks ties. |
+
+`reverseTicks = DateTime.MaxValue.Ticks - occurredAt.UtcTicks`, formatted to 19
+digits. A page is a range scan:
+
+```
+PartitionKey eq '{cardId}' and RowKey gt '{cursor}'
 ```
 
-A composite index on `(cardId ASC, occurredAt DESC, id ASC)` backs the feed
-query. Documents are upserted by `id`, so re-syncing the same page is idempotent.
+The cursor is the last returned `RowKey`, so pagination stays stable even when
+new transactions arrive between requests.
 
-`issuerPayload` keeps the raw response for diagnostics. It is never returned by
-the API.
+Entity fields: `OrgId`, `TransactionId`, `AmountMinor`, `Currency`, `Direction`,
+`Merchant`, `Status`, `OccurredAt`, `PostedAt`, `IssuerPayload` (string, the raw
+issuer JSON), `IngestedAt`. Entities are upserted by `RowKey`, so re-syncing the
+same transaction is idempotent.
+
+Known limits, accepted because the feed only ever does one thing: no
+cross-partition queries, no server-side aggregation, and 1 MB per entity. The
+issuer payload must stay under that limit; at a few KB per transaction it does.
 
 ### 8.6 Transaction store abstraction
 
-`Application` declares `ITransactionStore` with one read method (by card, cursor,
-limit) and one write method (upsert batch). Two adapters exist:
+`Application` declares `ITransactionStore` with one read method (card, cursor,
+limit) and one write method (upsert batch). The only adapter in this version is
+`TableTransactionStore`.
 
-- `CosmosTransactionStore` — default, used by `docker compose up`.
-- `SqlTransactionStore` — contingency for machines where the emulator will not
-  run; writes to an `app.transactions` table.
+Cosmos DB is deliberately **not** implemented. Nothing in this document needs a
+document database: the feed is per-card, append-only, and small. A
+`CosmosTransactionStore` can be added later without touching the application
+layer, because the port already exists. The trigger is a real requirement —
+multi-region reads, entities above 1 MB, rich querying, sustained write volume —
+not the wish to have a document database in the diagram.
 
-Selected by `TRANSACTIONS_STORE=cosmos|mssql`. This is demo insurance, not a
-supported dual-write design: exactly one adapter is active per deployment, and
-the contingency adapter will be deleted once the emulator path is proven stable.
+Cost note for that eventual decision: Cosmos DB bills by provisioned throughput
+or request units, and a provisioned container has a floor that is billed
+continuously even when idle. At demo volume (tens of rows, one user) that floor
+is the entire bill. Table Storage bills per stored GB and per request, which
+rounds to zero here.
 
 ### 8.7 Seed and sync
 
@@ -525,20 +535,18 @@ English only, `en-AU` formatting: `A$` currency symbol, `DD MMM YYYY` dates.
 | `sms-mock` | built from `tools/SmsMock` | 8083 | `GET /healthz` |
 | `issuer-mock` | built from `tools/IssuerMock` | 8084 | `GET /healthz` |
 | `mssql` | `mcr.microsoft.com/mssql/server:2022-latest` | none | `sqlcmd SELECT 1` |
-| `cosmos` | `mcr.microsoft.com/cosmosdb/linux/azure-cosmos-emulator` | none | gateway probe |
-| `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob probe |
+| `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
-Startup ordering: `mssql`, `cosmos`, `azurite` healthy → `auth` → `api`;
+Startup ordering: `mssql` and `azurite` healthy → `auth` → `api`;
 `api` also waits for `issuer-mock` and `sms-mock`.
 
 ### 10.2 Compose profiles
 
-- Default (`docker compose up --build`): all eight containers.
-- Lite (`docker compose -f compose.yaml -f compose.lite.yaml up --build`):
-  drops `cosmos` and sets `TRANSACTIONS_STORE=mssql`.
+One profile: everything. There is no lite mode, because the only component that
+justified one — the Cosmos emulator — is no longer in the stack.
 
-The lite profile exists so a demo can still run on a smaller laptop or on a
-machine where the Cosmos emulator misbehaves.
+If Cosmos is added later (§8.6), it arrives as an optional profile plus a second
+`ITransactionStore` adapter, not as a change to the default path.
 
 ### 10.3 Configuration
 
@@ -552,10 +560,8 @@ machine where the Cosmos emulator misbehaves.
 | `JWKS_URL` / `AUTH_METADATA_URL` | api | `http://auth:8081/.well-known/...` |
 | `SMS_PROVIDER_URL` | auth | `http://sms-mock:8083` |
 | `ISSUER_BASE_URL` / `ISSUER_API_KEY` | api | `http://issuer-mock:8084`, fake key |
-| `TRANSACTIONS_STORE` | api | `cosmos` |
-| `COSMOS_CONNECTION_STRING` | api | emulator DSN (`https://cosmos:8081`) |
-| `COSMOS_EMULATOR` | api | `true` — enables the dev-only certificate bypass |
-| `AZURE_STORAGE_CONNECTION_STRING` | api | `UseDevelopmentStorage=true` |
+| `AZURE_STORAGE_CONNECTION_STRING` | api | `UseDevelopmentStorage=true` (blobs and tables) |
+| `TRANSACTIONS_TABLE` | api | `transactions` |
 | `DATABASE_URL` (auth/api) | auth, api | Compose-internal DSNs |
 | `CORS_ORIGIN` | auth, api | `http://localhost:8080` |
 
@@ -596,15 +602,15 @@ Accepted for the demo, listed so nobody mistakes them for production:
 - In-memory challenge store; an `auth` restart drops pending challenges.
 - No revocation, no refresh token.
 - Rate limiting is per-challenge, not per-IP.
-- Cosmos emulator certificate validation is disabled when `COSMOS_EMULATOR=true`.
-  This flag must be false anywhere else, and it is read from configuration, not
-  defaulted in code.
+- Storage uses the Azurite development account with its well-known key.
+  Production would use managed identity or a scoped SAS instead of a connection
+  string.
 
 ## 12. Verification and acceptance
 
 The demo is done when all of these hold on a clean machine:
 
-1. `docker compose up --build` brings all eight services healthy with no manual
+1. `docker compose up --build` brings all seven services healthy with no manual
    steps.
 2. `http://localhost:8080` loads the sign-in screen on a 360 px viewport without
    horizontal scrolling.
@@ -623,23 +629,22 @@ The demo is done when all of these hold on a clean machine:
 10. With the network disconnected after build, the demo still passes steps 2–9.
 11. Stopping `issuer-mock` leaves the wallet usable and logs a handled upstream
     failure; it does not return 500 to the browser.
-12. `docker compose -f compose.yaml -f compose.lite.yaml up --build` produces the
-    same demo without the Cosmos container.
+12. `docker compose down -v && docker compose up` restores the identical demo,
+    including the same seeded transactions.
 
 ## 13. Risks and decisions
 
-### 13.1 The Cosmos emulator is the least reliable component
+### 13.1 Why Cosmos DB was dropped
 
-It is x64-only on the classic image, needs a self-signed certificate bypass,
-takes minutes to start, reserves 2–4 GB, and its advertised gateway host can
-fight with a container hostname. Mitigations, in order:
+The honest reason is that we could not say what it would hold. The candidate
+workload — a per-card transaction feed — is small, append-only, and queried one
+way, which Table Storage serves exactly, for pennies, from a container we
+already run. Cosmos would have added a 2–4 GB emulator, a certificate bypass, an
+x64-only image, and a minute-long start-up, in exchange for capabilities (global
+distribution, elastic throughput, rich queries) that this demo never exercises.
 
-1. Do not publish its ports; reach it as `https://cosmos:8081` internally.
-2. Bypass certificate validation only under `COSMOS_EMULATOR=true`.
-3. Fall back to the lite profile (`TRANSACTIONS_STORE=mssql`) for the demo
-   itself; the Cosmos path remains the reference implementation.
-4. On ARM64 hardware, use the `vnext-preview` emulator image, which supports
-   more platforms but only gateway mode with a subset of features.
+It is deferred, not rejected: `ITransactionStore` is the seam, and §8.6 lists
+the requirements that would justify adding it.
 
 ### 13.2 MediatR and AutoMapper are no longer free for every organisation
 
@@ -650,19 +655,18 @@ revenue (and, for MediatR, under US$10M in outside capital) and requires
 registering a licence key.
 
 For a demo, the cheapest and least risky option is to pin the last
-permissively-licensed versions (MediatR 12.x, AutoMapper 14.x or earlier) and
-record that pin in `Directory.Packages.props`. If the organisation prefers
-current versions, budget the Community licence registration instead. This must
-be an explicit decision before the first commit (see §14.1).
+permissively-licensed versions (MediatR 12.x, AutoMapper 14.x) and record that
+pin in `Directory.Packages.props`. The reasoning, the exact licence texts, and
+what management needs to sign off are in [`licensing.md`](licensing.md).
 
 FluentValidation is Apache-2.0 and unaffected by any of this; it needs no
 licensing decision.
 
-### 13.3 Eight containers is a lot for a laptop
+### 13.3 MSSQL dominates the footprint
 
-Total footprint is roughly 6–7 GB. If the demo machine has 8 GB, the lite
-profile is the realistic target. Do not promise "it runs anywhere" without
-measuring on the actual demo hardware.
+Total footprint is roughly 3 GB, almost all of it SQL Server. That is fine on a
+16 GB laptop and tight but workable on 8 GB. Do not promise "it runs anywhere"
+without measuring on the actual demo hardware.
 
 ### 13.4 Mock issuer determinism
 
@@ -672,10 +676,10 @@ demo contract.
 
 ## 14. Open questions
 
-1. **Licensing:** pin the free MediatR 12.x / AutoMapper 14.x, or upgrade and
-   register Community keys? Default in this document: pin.
-2. **Demo hardware:** which machine and Docker Desktop memory allocation will be
-   used? This decides whether Cosmos is on the critical path.
+1. **Licensing:** confirm the pinning approach in `licensing.md` with management.
+   Default in this document: pin the permissive versions, no licence key.
+2. **Cosmos DB:** does anything else in the roadmap need it? If not, the port
+   stays unused and that is the correct outcome.
 3. **Real IdP:** is Auth0, Entra, or Cognito expected later? If so, `auth` will
    be replaced rather than extended — which is fine, but it changes how much
    credential logic is worth writing.
