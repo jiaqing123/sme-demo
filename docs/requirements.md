@@ -108,7 +108,7 @@ key.
 | API host | ASP.NET Core minimal APIs |
 | Endpoint orchestration | MediatR (community/free version pinned — see §13.2) |
 | Object mapping | AutoMapper (free version pinned — see §13.2) |
-| Validation | `System.ComponentModel.DataAnnotations` + a MediatR pipeline behaviour |
+| Validation | FluentValidation (Apache-2.0, current stable) + a MediatR pipeline behaviour |
 | Persistence (relational) | EF Core 10 + `Microsoft.EntityFrameworkCore.SqlServer` |
 | Persistence (documents) | `Microsoft.Azure.Cosmos` |
 | Blob storage | `Azure.Storage.Blobs` |
@@ -121,8 +121,14 @@ key.
 | Health checks | `Microsoft.Extensions.Diagnostics.HealthChecks` |
 | Logging | built-in `Microsoft.Extensions.Logging`, JSON console |
 
-Deliberately not used, to honour "prefer Microsoft packages": FluentValidation,
-Serilog, Swashbuckle, Dapper, Mapster, MassTransit.
+**Preference rule.** Microsoft packages come first for runtime, hosting,
+authentication, data access, and outbound HTTP. A well-maintained OSS library is
+acceptable when it is licence-clean and has no real first-party equivalent:
+FluentValidation qualifies (Apache-2.0), as do MediatR and AutoMapper in their
+last permissively-licensed versions (§13.2). Packages that duplicate a
+first-party capability without adding much stay out: Serilog (built-in logging),
+Swashbuckle (built-in OpenAPI), Dapper (EF Core), Mapster (AutoMapper),
+MassTransit (not needed at this size).
 
 ### 5.5 Layering rules
 
@@ -149,6 +155,14 @@ The rules that make "thin endpoints" mean something:
 | No business rules in handlers that belong to entities. | Domain project owns invariants; handlers orchestrate. |
 | Every third-party dependency is behind an interface declared in `Application`. | Adapters live in `Infrastructure` and are registered in the composition root. |
 | Cross-cutting concerns are pipeline behaviours, not repeated code. | Logging, validation, and timing behaviours in `Application`. |
+
+**Where validation lives.** Request shape — required fields, formats, ranges,
+page sizes, 6-digit OTP codes — is enforced by FluentValidation validators in
+`Application`, run by a pipeline behaviour before the handler. Business
+invariants — a card belongs to the caller, an amount is positive, a status
+transition is legal — stay in `Domain`. Validators never touch the database: a
+check that needs a lookup is a business decision, and belongs in the handler
+where it can also return the right error code.
 
 Typical request path: endpoint → `ISender.Send(GetCardTransactionsQuery)` →
 validation behaviour → handler → `ITransactionStore` / `ICardRepository` →
@@ -316,9 +330,17 @@ so blob credentials never reach the browser.
 { "error": { "code": "TOKEN_EXPIRED", "message": "Access token has expired." } }
 ```
 
+Validation failures additionally carry a per-field dictionary:
+
+```json
+{ "error": { "code": "VALIDATION_ERROR",
+             "message": "One or more validation errors occurred.",
+             "errors": { "code": ["The code must be 6 digits."] } } }
+```
+
 | Code | HTTP | When |
 |------|------|------|
-| `VALIDATION_ERROR` | 400 | Malformed body or query. |
+| `VALIDATION_ERROR` | 400 | Malformed body or query, or a validator rejected the request; details in `error.errors`. |
 | `UNAUTHENTICATED` | 401 | Missing or unparseable bearer token. |
 | `TOKEN_EXPIRED` | 401 | `exp` in the past. |
 | `INVALID_TOKEN` | 401 | Signature, `iss`, or `aud` mismatch. |
@@ -632,6 +654,9 @@ permissively-licensed versions (MediatR 12.x, AutoMapper 14.x or earlier) and
 record that pin in `Directory.Packages.props`. If the organisation prefers
 current versions, budget the Community licence registration instead. This must
 be an explicit decision before the first commit (see §14.1).
+
+FluentValidation is Apache-2.0 and unaffected by any of this; it needs no
+licensing decision.
 
 ### 13.3 Eight containers is a lot for a laptop
 
