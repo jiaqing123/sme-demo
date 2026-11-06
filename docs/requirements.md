@@ -714,7 +714,35 @@ Images are pulled and NuGet/npm dependencies restored once during
 `docker compose build`, when a network is available. After that the demo runs
 with no outbound traffic: no external SMS, no CDN assets, no remote fonts.
 
-## 11. Security posture
+### 10.6 Deployment configuration
+
+Build and deploy are separate concerns with separate artefacts:
+
+| Stage | Output | Lives in |
+|-------|--------|----------|
+| Build | container images tagged by commit SHA | image registry |
+| Configure | per-environment values: image tag, ports, replicas, secret references | a deployment repository |
+| Deploy | a commit that changes the image tag | the same deployment repository |
+
+Rules:
+
+- Images are immutable and tagged by commit SHA; `latest` is never deployed.
+- Deployment configuration is code, reviewed like code, and lives in its own
+  repository whose write access is restricted to release owners (CODEOWNERS
+  plus branch protection). Developers change the application; release owners
+  change what runs, and where.
+- A deploy is a commit, and a rollback is a revert of that commit. That is the
+  "every change is traceable, nothing is done by hand" property.
+- Secrets are never stored in the deployment repository; it references a secret
+  store or, in the demo, an uncommitted `.env` file.
+- Kubernetes manifests or Helm values are the usual shape of that repository at
+  scale. They are out of scope here, because there is no cluster to deploy to.
+
+For this demo, `compose.yaml` in this repository is the entire deployment. When
+the demo earns a server, the split applies unchanged: a small
+`sme-demo-deploy` repository holding the compose file or Helm values, and a
+pipeline that applies it on merge.
+
 
 Implemented:
 

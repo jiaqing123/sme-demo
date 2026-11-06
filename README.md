@@ -24,8 +24,9 @@ roles, core workflows, data model, and non-functional constraints.
 ## Repository layout
 
 ```
-docs/requirements.md   System requirements and architecture
-docs/licensing.md      Third-party licensing notes for management review
+docs/requirements.md                System requirements and architecture
+docs/licensing.md                   Third-party licensing notes for management review
+docs/declarative-schema-workshop.md 45-minute walkthrough of state-based schema tooling
 ```
 
 ## Audience
