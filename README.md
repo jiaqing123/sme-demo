@@ -13,10 +13,10 @@ Requirements and design. No code yet.
 The first milestone is an agreed requirements document covering the user
 roles, core workflows, data model, and non-functional constraints.
 
-## Repository layout (planned)
+## Repository layout
 
 ```
-docs/     Requirements and design documents
+docs/requirements.md   System requirements and architecture
 ```
 
 ## Audience
