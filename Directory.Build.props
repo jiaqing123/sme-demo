@@ -1,0 +1,18 @@
+<Project>
+
+  <!--
+    Shared build settings. Package versions are centralised in
+    Directory.Packages.props so that the licensing pins in docs/licensing.md
+    cannot be overridden by a stray Version attribute.
+  -->
+
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AnalysisLevel>latest</AnalysisLevel>
+  </PropertyGroup>
+
+</Project>

@@ -1,3 +1,9 @@
+# .NET
+bin/
+obj/
+*.user
+TestResults/
+
 # OS
 .DS_Store
 Thumbs.db

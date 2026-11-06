@@ -1,0 +1,13 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SmeDemo.Domain/SmeDemo.Domain.csproj" />
+    <Project Path="src/SmeDemo.Infrastructure/SmeDemo.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Migrator.Tests/Migrator.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/" />
+  <Folder Name="/tools/Migrator/">
+    <Project Path="tools/Migrator/SmeDemo.Migrator.csproj" />
+  </Folder>
+</Solution>

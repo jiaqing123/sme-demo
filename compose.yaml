@@ -1,0 +1,45 @@
+name: sme-demo
+
+services:
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?create .env from .env.example}"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b -o /dev/null"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    volumes:
+      - mssql-data:/var/opt/mssql
+    networks:
+      - sme
+
+  # One-shot. Applies db/migrations to the database, then exits. Nothing else
+  # starts until it succeeds.
+  db-migrator:
+    build:
+      context: .
+      dockerfile: tools/Migrator/Dockerfile
+    environment:
+      DATABASE_URL: "Server=mssql;Database=sme_api;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      MIGRATIONS_PATH: /app/migrations/api
+      DB_WAIT_SECONDS: "120"
+    depends_on:
+      mssql:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - sme
+
+networks:
+  sme:
+    driver: bridge
+
+volumes:
+  mssql-data:

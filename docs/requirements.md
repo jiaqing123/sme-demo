@@ -492,9 +492,9 @@ single largest stability property in the design.
 - A migration reaches a database only through the **idempotent SQL script**
   generated from it (`dotnet ef migrations script --idempotent`), never through
   `Database.Migrate()` at application start-up.
-- Those scripts are committed artefacts (`migrations/auth.sql`,
-  `migrations/api.sql`) and baked into the `db-migrator` image. Reviewers read
-  SQL, not C# builder calls.
+- Those scripts are committed artefacts (`db/migrations/api/sme_api.sql` today;
+  the auth service brings its own directory) and baked into the `db-migrator`
+  image. Reviewers read SQL, not C# builder calls.
 - `db-migrator` runs once per `docker compose up`, before `auth` and `api`, and
   exits. If it fails, nothing else starts.
 
