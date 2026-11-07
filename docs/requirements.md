@@ -66,7 +66,9 @@ There are no administrators. All users are peers; the demo has exactly one.
 | `issuer-mock` | Stand-in card issuer. Serves card transactions over HTTP. | none (in-memory fixture) | 8084 |
 | `sms-mock` | Stand-in SMS provider. Accepts a send request and logs it. | none | 8083 |
 | `mssql` | SQL Server 2022. Hosts `sme_auth` and `sme_api`. | `mssql-data` volume | internal 1433 |
-| `db-migrator` | One-shot. Applies idempotent schema scripts, then exits. | `__EFMigrationsHistory` in both databases | none |
+| `db-migrator` | One-shot. Applies the API schema script, then exits. | `__EFMigrationsHistory` in `sme_api` | none |
+| `db-migrator-auth` | One-shot. Applies the auth schema script, then exits. | `__EFMigrationsHistory` in `sme_auth` | none |
+| `db-grants` | One-shot. Creates the two least-privilege application logins. | SQL logins and database users | none |
 | `azurite` | Azure Storage emulator. Table for the transaction feed, blob container for card artwork. | `azurite-data` volume | internal 10000, 10002 |
 
 Only `web`, `auth`, `api`, `sms-mock`, and `issuer-mock` publish host ports.
@@ -174,7 +176,8 @@ DTO mapped by AutoMapper → `Results.Ok` or a `ProblemDetails` result.
 
 ### 5.6 Container and resource footprint
 
-Eight containers, one of which is a one-shot migrator. Approximate steady-state memory:
+Ten containers, three of which run once (the two migrators and `db-grants`).
+Approximate steady-state memory:
 
 | Container | Memory | Notes |
 |-----------|--------|-------|
@@ -185,6 +188,7 @@ Eight containers, one of which is a one-shot migrator. Approximate steady-state 
 | `api` | ~250 MB | |
 | `issuer-mock` | ~150 MB | |
 | `sms-mock` | ~150 MB | |
+| `db-migrator`, `db-migrator-auth`, `db-grants` | one-shot | Apply the schema and create the application logins, then exit. |
 | **Total** | **~3 GB** | Docker Desktop memory of 4 GB is enough; 8 GB is comfortable. |
 
 The MSSQL container dominates this. The Cosmos emulator was the real cost, and
@@ -805,9 +809,12 @@ Card expiry is the industry `MM/YY` form (`09/28`), not a full date.
 | `issuer-mock` | built from `tools/IssuerMock` | 8084 | `GET /healthz` |
 | `mssql` | `mcr.microsoft.com/mssql/server:2022-latest` | none | `sqlcmd SELECT 1` |
 | `db-migrator` | built from `tools/Migrator` | none | exits 0 |
+| `db-migrator-auth` | built from `tools/Migrator` | none | exits 0 |
+| `db-grants` | `mcr.microsoft.com/mssql/server:2022-latest` | none | exits 0 |
 | `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
-Startup ordering: `mssql` healthy → `db-migrator` completes → `auth` → `api`;
+Startup ordering: `mssql` healthy → `db-migrator` and `db-migrator-auth` complete
+→ `db-grants` completes → `auth` → `api`;
 `api` also waits for `azurite` and for `issuer-mock` to start. `web` starts only
 after both `auth` and `api` are healthy, and its healthcheck requests `/`, which
 proves that nginx is serving the built shell; the reverse proxy itself is

@@ -25,6 +25,7 @@ public sealed class IssuerSyncService : BackgroundService
     private readonly InfrastructureOptions _options;
     private readonly IIssuerClient _issuer;
     private readonly ILogger<IssuerSyncService> _logger;
+    private readonly SemaphoreSlim _roundGate = new(1, 1);
 
     public IssuerSyncService(
         IServiceScopeFactory scopeFactory,
@@ -67,7 +68,22 @@ public sealed class IssuerSyncService : BackgroundService
     /// </summary>
     public async Task SyncOnceAsync(CancellationToken cancellationToken)
     {
-        await SyncRoundAsync(cancellationToken);
+        // Overlapping rounds would both read "no sync row" and insert, turning a
+        // successful sync into a primary-key failure recorded as failed.
+        if (!await _roundGate.WaitAsync(0, cancellationToken))
+        {
+            _logger.LogInformation("Issuer sync skipped: a round is already running.");
+            return;
+        }
+
+        try
+        {
+            await SyncRoundAsync(cancellationToken);
+        }
+        finally
+        {
+            _roundGate.Release();
+        }
     }
 
     private async Task RunStartupSyncAsync(CancellationToken cancellationToken)

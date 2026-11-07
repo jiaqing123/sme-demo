@@ -278,6 +278,22 @@ public sealed class ResourceApiTests
             body.RootElement.GetProperty("error").GetProperty("code").GetString());
     }
 
+    [TestMethod]
+    public async Task Transactions_WhenStoreIsUnavailable_ReturnsUpstreamUnavailable()
+    {
+        _client.DefaultRequestHeaders.Authorization = Bearer(_factory.CreateToken());
+        _factory.Transactions.Unavailable = true;
+
+        var response = await _client.GetAsync($"/api/v1/me/cards/{FirstCardId}/transactions");
+        using var body = await ReadJsonAsync(response);
+
+        Assert.AreEqual(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.AreEqual(
+            "UPSTREAM_UNAVAILABLE",
+            body.RootElement.GetProperty("error").GetProperty("code").GetString());
+        Assert.AreEqual(TimeSpan.FromSeconds(5), response.Headers.RetryAfter?.Delta);
+    }
+
     private static AuthenticationHeaderValue Bearer(string token) => new("Bearer", token);
 
     private static async Task<JsonDocument> ReadJsonAsync(HttpResponseMessage response) =>

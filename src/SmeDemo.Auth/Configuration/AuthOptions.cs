@@ -29,7 +29,12 @@ public sealed record AuthOptions(
     public static AuthOptions FromEnvironment()
     {
         var databaseUrl = Required("DATABASE_URL");
-        var demoMode = ReadBool("DEMO_MODE", fallback: true);
+        // Fail closed: demo behaviour (fixed OTP, published password) must be an
+        // explicit opt-in, never a default that survives into a shared host.
+        var demoMode = ReadBool("DEMO_MODE", fallback: false);
+        var demoUsername = Read("DEMO_USERNAME", DefaultDemoUsername);
+        var demoPassword = Read("DEMO_PASSWORD", DefaultDemoPassword);
+        var demoPhone = Read("DEMO_PHONE", DefaultDemoPhone);
         var demoOtp = Read("DEMO_OTP", DefaultDemoOtp);
         var demoOtpWasConfigured = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DEMO_OTP"));
         var smsProviderUrl = Optional("SMS_PROVIDER_URL");
@@ -53,13 +58,23 @@ public sealed record AuthOptions(
                 "SMS_PROVIDER_URL is required when DEMO_MODE is false.");
         }
 
+        if (!demoMode &&
+            (string.Equals(demoUsername, DefaultDemoUsername, StringComparison.Ordinal) ||
+             string.Equals(demoPassword, DefaultDemoPassword, StringComparison.Ordinal) ||
+             string.Equals(demoPhone, DefaultDemoPhone, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "DEMO_USERNAME, DEMO_PASSWORD and DEMO_PHONE must be changed from their demo values " +
+                "when DEMO_MODE is false.");
+        }
+
         return new AuthOptions(
             DatabaseUrl: databaseUrl,
             OrgId: Read("ORG_ID", "sme"),
             DemoMode: demoMode,
-            DemoUsername: Read("DEMO_USERNAME", DefaultDemoUsername),
-            DemoPassword: Read("DEMO_PASSWORD", DefaultDemoPassword),
-            DemoPhone: Read("DEMO_PHONE", DefaultDemoPhone),
+            DemoUsername: demoUsername,
+            DemoPassword: demoPassword,
+            DemoPhone: demoPhone,
             DemoOtp: demoOtp,
             DemoOtpWasConfigured: demoOtpWasConfigured,
             JwtIssuer: jwtIssuer,

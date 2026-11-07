@@ -95,15 +95,4 @@ public sealed class GetTransactionsHandlerTests
                 new GetTransactionsQuery(TestData.OtherUserId, _cardId, null, 20),
                 CancellationToken.None));
     }
-
-    [TestMethod]
-    public async Task Handle_InvalidCursorThrowsValidation()
-    {
-        var exception = await Assert.ThrowsExactlyAsync<RequestValidationException>(() =>
-            _handler.Handle(
-                new GetTransactionsQuery(TestData.UserId, _cardId, "not-a-valid-cursor", 20),
-                CancellationToken.None));
-
-        Assert.IsTrue(exception.Errors.ContainsKey("cursor"));
-    }
 }

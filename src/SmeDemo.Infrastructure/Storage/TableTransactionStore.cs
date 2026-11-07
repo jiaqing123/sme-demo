@@ -1,5 +1,7 @@
+using Azure;
 using Azure.Data.Tables;
 using SmeDemo.Application.Abstractions;
+using SmeDemo.Application.Errors;
 
 namespace SmeDemo.Infrastructure.Storage;
 
@@ -40,18 +42,25 @@ public sealed class TableTransactionStore : ITransactionStore
         var items = new List<TransactionRecord>(limit);
         string? nextRowKey = null;
 
-        await foreach (var entity in _table.QueryAsync<TableEntity>(
-            filter: filter,
-            maxPerPage: limit + 1,
-            cancellationToken: cancellationToken))
+        try
         {
-            if (items.Count == limit)
+            await foreach (var entity in _table.QueryAsync<TableEntity>(
+                filter: filter,
+                maxPerPage: limit + 1,
+                cancellationToken: cancellationToken))
             {
-                nextRowKey = items[^1].RowKey;
-                break;
-            }
+                if (items.Count == limit)
+                {
+                    nextRowKey = items[^1].RowKey;
+                    break;
+                }
 
-            items.Add(ToRecord(entity));
+                items.Add(ToRecord(entity));
+            }
+        }
+        catch (RequestFailedException exception)
+        {
+            throw new StoreUnavailableException("The transaction store is unavailable.", exception);
         }
 
         return new TransactionPage(items, nextRowKey);
@@ -81,7 +90,14 @@ public sealed class TableTransactionStore : ITransactionStore
 
             foreach (var batch in actions)
             {
-                await _table.SubmitTransactionAsync(batch, cancellationToken);
+                try
+                {
+                    await _table.SubmitTransactionAsync(batch, cancellationToken);
+                }
+                catch (RequestFailedException exception)
+                {
+                    throw new StoreUnavailableException("The transaction store is unavailable.", exception);
+                }
             }
         }
     }

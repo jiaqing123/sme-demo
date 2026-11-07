@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes } from "react";
+import { forwardRef, type InputHTMLAttributes } from "react";
 
 interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
   id: string;
@@ -7,7 +7,10 @@ interface FieldProps extends InputHTMLAttributes<HTMLInputElement> {
   hint?: string;
 }
 
-export function Field({ id, label, error, hint, className = "", ...input }: FieldProps) {
+export const Field = forwardRef<HTMLInputElement, FieldProps>(function Field(
+  { id, label, error, hint, className = "", ...input },
+  ref,
+) {
   const describedBy = [
     hint ? `${id}-hint` : null,
     error ? `${id}-error` : null,
@@ -21,6 +24,7 @@ export function Field({ id, label, error, hint, className = "", ...input }: Fiel
         {label}
       </label>
       <input
+        ref={ref}
         id={id}
         aria-invalid={error ? true : undefined}
         aria-describedby={describedBy || undefined}
@@ -41,4 +45,4 @@ export function Field({ id, label, error, hint, className = "", ...input }: Fiel
       ) : null}
     </div>
   );
-}
+});

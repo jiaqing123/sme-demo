@@ -65,12 +65,11 @@ public sealed class GetTransactionsHandler : IRequestHandler<GetTransactionsQuer
         }
 
         string? afterRowKey = null;
-        if (request.Cursor is not null && !CursorCodec.TryDecode(request.Cursor, out afterRowKey))
+        if (request.Cursor is not null)
         {
-            throw new RequestValidationException(new Dictionary<string, string[]>
-            {
-                ["cursor"] = ["The cursor is not valid."],
-            });
+            // The validator already rejected an undecodable cursor; this only
+            // turns the opaque token back into the storage key.
+            CursorCodec.TryDecode(request.Cursor, out afterRowKey);
         }
 
         var limit = request.Limit ?? GetTransactionsQueryValidator.DefaultLimit;

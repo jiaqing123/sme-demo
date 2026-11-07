@@ -24,6 +24,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             ResourceForbiddenException forbidden => ApiProblem.Forbidden(forbidden.Message),
             ResourceNotFoundException notFound => ApiProblem.NotFound(notFound.Message),
             UnauthenticatedException unauthenticated => ApiProblem.Unauthenticated(unauthenticated.Message),
+            StoreUnavailableException => ApiProblem.UpstreamUnavailable(),
             BadHttpRequestException => ApiProblem.Validation(new Dictionary<string, string[]>
             {
                 ["body"] = ["The request body could not be read."],
@@ -41,6 +42,11 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         }
 
         httpContext.Response.StatusCode = problem.StatusCode;
+        if (problem.StatusCode == StatusCodes.Status503ServiceUnavailable)
+        {
+            httpContext.Response.Headers.RetryAfter = "5";
+        }
+
         await httpContext.Response.WriteAsJsonAsync(
             problem.ToProblemDetails(),
             options: null,

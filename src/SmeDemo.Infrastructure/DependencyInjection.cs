@@ -24,7 +24,9 @@ public static class DependencyInjection
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
 
-        services.AddDbContext<AppDbContext>(db => db.UseSqlServer(options.DatabaseUrl));
+        services.AddDbContext<AppDbContext>(db => db.UseSqlServer(
+            options.DatabaseUrl,
+            sql => sql.EnableRetryOnFailure(3, TimeSpan.FromSeconds(2), null)));
 
         services.AddSingleton(options);
         services.AddSingleton(_ => new TableServiceClient(options.StorageConnectionString));

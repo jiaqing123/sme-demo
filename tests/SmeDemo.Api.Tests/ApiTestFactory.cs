@@ -11,6 +11,7 @@ using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using SmeDemo.Application.Abstractions;
+using SmeDemo.Application.Errors;
 using SmeDemo.Application.Features.Transactions;
 using SmeDemo.Domain.Entities;
 
@@ -236,12 +237,20 @@ public sealed class FakeTransactionStore : ITransactionStore
 {
     public List<TransactionRecord> Records { get; } = [];
 
+    /// <summary>Set to simulate an unreachable store after retries.</summary>
+    public bool Unavailable { get; set; }
+
     public Task<TransactionPage> ReadAsync(
         Guid cardId,
         string? afterRowKey,
         int limit,
         CancellationToken cancellationToken)
     {
+        if (Unavailable)
+        {
+            throw new StoreUnavailableException("The transaction store is unavailable.");
+        }
+
         var ordered = Records
             .Where(record => record.CardId == cardId)
             .OrderBy(record => record.RowKey, StringComparer.Ordinal)

@@ -70,10 +70,14 @@ public sealed class ApiDataSeeder : IHostedService
         // starting even after the migrator has completed.
         await db.Cards.AnyAsync(cancellationToken);
 
+        // One read for all ids instead of one EXISTS query per card.
+        var existingIds = await db.Cards
+            .Select(card => card.Id)
+            .ToHashSetAsync(cancellationToken);
+
         foreach (var seed in DemoSeedData.Cards)
         {
-            var exists = await db.Cards.AnyAsync(card => card.Id == seed.Id, cancellationToken);
-            if (!exists)
+            if (!existingIds.Contains(seed.Id))
             {
                 db.Cards.Add(DemoSeedData.CreateCard(seed, _options.OrgId));
             }

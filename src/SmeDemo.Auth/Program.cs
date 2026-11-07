@@ -72,6 +72,22 @@ app.UseStatusCodePages(async statusCodeContext =>
 
 app.UseCors();
 
+// Login challenges, tokens and the phone number in /auth/userinfo must not be
+// cached by a proxy or the browser.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/auth"))
+    {
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Task.CompletedTask;
+        });
+    }
+
+    await next();
+});
+
 await AuthDbSeeder.SeedAsync(app.Services, options, CancellationToken.None);
 
 app.MapAuthEndpoints();

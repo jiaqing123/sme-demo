@@ -45,6 +45,14 @@ public sealed class ChallengeStore
 
         lock (challenge.Sync)
         {
+            // A concurrent verification may have consumed the challenge after
+            // this thread read it from the dictionary. The flag makes success
+            // single-use even when two requests overlap.
+            if (challenge.Consumed)
+            {
+                return new ChallengeVerification(ChallengeVerificationOutcome.NotFound);
+            }
+
             var now = _clock.GetUtcNow();
             if (now >= challenge.ExpiresAt)
             {
@@ -73,6 +81,7 @@ public sealed class ChallengeStore
             }
 
             // Single use: a successful verification destroys the challenge.
+            challenge.Consumed = true;
             _challenges.TryRemove(challenge.Id, out _);
             return new ChallengeVerification(ChallengeVerificationOutcome.Success, challenge.UserId);
         }
@@ -152,6 +161,8 @@ public sealed class ChallengeStore
         public Guid UserId { get; }
 
         public string Code { get; set; }
+
+        public bool Consumed { get; set; }
 
         public DateTimeOffset ExpiresAt { get; }
 

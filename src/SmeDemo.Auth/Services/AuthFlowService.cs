@@ -17,6 +17,19 @@ namespace SmeDemo.Auth.Services;
 /// </summary>
 public sealed class AuthFlowService
 {
+    // Verified whenever the username is unknown, so both branches pay the same
+    // PBKDF2 cost and response time does not reveal whether an account exists.
+    private static readonly AuthUser TimingDecoy = AuthUser.Create(
+        Guid.Empty,
+        "timing",
+        "timing-decoy",
+        "Timing Decoy",
+        "+61000000000",
+        DateTime.UnixEpoch);
+
+    private static readonly string TimingDecoyHash =
+        new PasswordHasher<AuthUser>().HashPassword(TimingDecoy, "not-a-real-password");
+
     private readonly AuthDbContext _db;
     private readonly ChallengeStore _challenges;
     private readonly IPasswordHasher<AuthUser> _passwordHasher;
@@ -63,9 +76,12 @@ public sealed class AuthFlowService
             user = null;
         }
 
-        if (user is null || !user.IsActive ||
-            _passwordHasher.VerifyHashedPassword(user, user.PasswordHash, request.Password!) ==
-            PasswordVerificationResult.Failed)
+        var passwordMatches = _passwordHasher.VerifyHashedPassword(
+            user ?? TimingDecoy,
+            user?.PasswordHash ?? TimingDecoyHash,
+            request.Password!) != PasswordVerificationResult.Failed;
+
+        if (user is null || !user.IsActive || !passwordMatches)
         {
             _logger.LogWarning("Login rejected.");
             return OperationResult<ChallengeResponse>.Failure(

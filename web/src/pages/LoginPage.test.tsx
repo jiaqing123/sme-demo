@@ -20,13 +20,15 @@ const challenge = {
   resend_in: 60,
 };
 
-function renderLogin(path = "/login") {
+function renderLogin(path = "/login", state?: unknown) {
+  const entry = state === undefined ? path : { pathname: path, state };
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={[entry]}>
       <SessionProvider>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/wallet" element={<div>Wallet destination</div>} />
+          <Route path="/wallet/cards/:cardId" element={<div>Card destination</div>} />
         </Routes>
       </SessionProvider>
     </MemoryRouter>,
@@ -152,5 +154,37 @@ describe("LoginPage", () => {
     renderLogin("/login?reason=expired");
 
     expect(screen.getByText("Your session expired. Sign in again.")).toBeInTheDocument();
+  });
+
+  it("moves focus to the verification code when the OTP step opens", async () => {
+    const user = userEvent.setup();
+    apiFetchMock.mockResolvedValueOnce(challenge as never);
+
+    renderLogin();
+    await user.type(screen.getByLabelText("Username"), "demo");
+    await user.type(screen.getByLabelText("Password"), "Demo_Passw0rd!");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByLabelText("Verification code")).toHaveFocus();
+  });
+
+  it("returns to the deep link after sign-in", async () => {
+    const user = userEvent.setup();
+    apiFetchMock
+      .mockResolvedValueOnce(challenge as never)
+      .mockResolvedValueOnce({
+        access_token: "token-from-verify",
+        token_type: "Bearer",
+        expires_in: 1800,
+      } as never);
+
+    renderLogin("/login", { from: "/wallet/cards/c1" });
+    await user.type(screen.getByLabelText("Username"), "demo");
+    await user.type(screen.getByLabelText("Password"), "Demo_Passw0rd!");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.type(await screen.findByLabelText("Verification code"), "123456");
+    await user.click(screen.getByRole("button", { name: "Verify and sign in" }));
+
+    expect(await screen.findByText("Card destination")).toBeInTheDocument();
   });
 });

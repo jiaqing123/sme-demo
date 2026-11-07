@@ -1,6 +1,8 @@
+using Azure;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
 using SmeDemo.Application.Abstractions;
+using SmeDemo.Application.Errors;
 
 namespace SmeDemo.Infrastructure.Storage;
 
@@ -22,17 +24,26 @@ public sealed class BlobCardArtStore : IBlobStore
         await EnsureContainerAsync(cancellationToken);
 
         var blob = _container.GetBlobClient(blobName);
-        if (!await blob.ExistsAsync(cancellationToken))
+
+        // One round trip: a separate ExistsAsync check doubles latency and opens a
+        // race where a blob deleted between the two calls becomes a 500.
+        try
+        {
+            var response = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
+            var contentType = string.IsNullOrWhiteSpace(response.Value.Details.ContentType)
+                ? "application/octet-stream"
+                : response.Value.Details.ContentType;
+
+            return new BlobContent(response.Value.Content, contentType);
+        }
+        catch (RequestFailedException exception) when (exception.Status == 404)
         {
             return null;
         }
-
-        var response = await blob.DownloadStreamingAsync(cancellationToken: cancellationToken);
-        var contentType = string.IsNullOrWhiteSpace(response.Value.Details.ContentType)
-            ? "application/octet-stream"
-            : response.Value.Details.ContentType;
-
-        return new BlobContent(response.Value.Content, contentType);
+        catch (RequestFailedException exception)
+        {
+            throw new StoreUnavailableException("The artwork store is unavailable.", exception);
+        }
     }
 
     public async Task UploadAsync(

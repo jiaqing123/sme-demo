@@ -31,4 +31,10 @@ public sealed record ApiProblem(
 
     public static ApiProblem Internal() =>
         new(StatusCodes.Status500InternalServerError, ErrorCodes.Internal, "An unexpected error occurred.");
+
+    public static ApiProblem UpstreamUnavailable() =>
+        new(
+            StatusCodes.Status503ServiceUnavailable,
+            ErrorCodes.UpstreamUnavailable,
+            "A required store is unavailable. Try again shortly.");
 }

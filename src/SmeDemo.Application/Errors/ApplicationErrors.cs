@@ -38,3 +38,21 @@ public sealed class UnauthenticatedException : Exception
     {
     }
 }
+
+/// <summary>
+/// A required external store (SQL Server, Table or Blob Storage) could not be
+/// reached after retries. The API renders it as UPSTREAM_UNAVAILABLE/503 from
+/// requirements §7.2 instead of leaking a driver exception as INTERNAL.
+/// </summary>
+public sealed class StoreUnavailableException : Exception
+{
+    public StoreUnavailableException(string message)
+        : base(message)
+    {
+    }
+
+    public StoreUnavailableException(string message, Exception innerException)
+        : base(message, innerException)
+    {
+    }
+}

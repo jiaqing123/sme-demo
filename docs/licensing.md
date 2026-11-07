@@ -116,7 +116,9 @@ past either limit, a per-seat subscription is required.
 ## 8. How this stays true
 
 - Versions are pinned centrally in `Directory.Packages.props`; nothing floats.
-- A build check (`dotnet list package --include-transitive`, plus a licence
-  scan) fails if MediatR reaches 13+, AutoMapper reaches 15+, or any GPL, AGPL,
-  or SSPL package appears in the dependency graph.
+- CI fails if the pinned MediatR reaches 13+ or AutoMapper reaches 15+.
+- `dotnet list package --vulnerable --include-transitive` is part of the package
+  review; the AutoMapper advisory in §3 is the one accepted finding.
+- The GPL/AGPL/SSPL inventory is reviewed by hand whenever a package is added or
+  upgraded; there is no automated licence scan.
 - This document is reviewed whenever a package is added or upgraded.

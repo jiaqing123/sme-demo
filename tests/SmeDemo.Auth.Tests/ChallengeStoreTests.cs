@@ -109,6 +109,20 @@ public sealed class ChallengeStoreTests
         Assert.AreEqual(ChallengeResendOutcome.Expired, store.Resend(ticket.Id, "654321").Outcome);
     }
 
+    [TestMethod]
+    public async Task Verify_ConcurrentRequestsYieldExactlyOneSuccess()
+    {
+        var (store, _) = CreateStore();
+        var ticket = store.Create(UserId, "123456");
+
+        var results = await Task.WhenAll(
+            Enumerable.Range(0, 32).Select(_ => Task.Run(() => store.Verify(ticket.Id, "123456"))));
+
+        Assert.AreEqual(
+            1,
+            results.Count(result => result.Outcome == ChallengeVerificationOutcome.Success));
+    }
+
     private static (ChallengeStore Store, ManualTimeProvider Clock) CreateStore()
     {
         var clock = new ManualTimeProvider(Start);

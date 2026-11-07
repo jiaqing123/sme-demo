@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { ApiError, apiFetch } from "../api/client";
 import type {
   ChallengeResponse,
@@ -32,10 +32,24 @@ function retrySeconds(message: string): number {
   return Number.isFinite(seconds) && seconds > 0 ? seconds : 60;
 }
 
+/** Only a same-origin absolute path is safe to return to after sign-in. */
+function returnPath(state: unknown): string {
+  if (typeof state === "object" && state !== null) {
+    const from = (state as { from?: unknown }).from;
+    if (typeof from === "string" && from.startsWith("/") && !from.startsWith("//")) {
+      return from;
+    }
+  }
+  return "/wallet";
+}
+
 export function LoginPage() {
   const config = useMemo(() => getConfig(), []);
   const { session, signIn } = useSession();
   const navigate = useNavigate();
+  const location = useLocation();
+  const from = useMemo(() => returnPath(location.state), [location.state]);
+  const otpRef = useRef<HTMLInputElement>(null);
   const [searchParams] = useSearchParams();
   const reason = searchParams.get("reason");
 
@@ -56,8 +70,14 @@ export function LoginPage() {
     return () => window.clearTimeout(timer);
   }, [resendIn]);
 
+  // The credentials form unmounts when the OTP step appears; without this the
+  // focused element disappears and keyboard users are dropped onto <body>.
+  useEffect(() => {
+    if (step === "otp") otpRef.current?.focus();
+  }, [step]);
+
   if (session) {
-    return <Navigate to="/wallet" replace />;
+    return <Navigate to={from} replace />;
   }
 
   const resetMessages = () => {
@@ -123,7 +143,7 @@ export function LoginPage() {
         { auth: false },
       );
       signIn(response.access_token, response.expires_in);
-      navigate("/wallet", { replace: true });
+      navigate(from, { replace: true });
     } catch (caught) {
       applyError(caught);
     } finally {
@@ -259,6 +279,7 @@ export function LoginPage() {
             autoComplete="one-time-code"
             maxLength={6}
             pattern="[0-9]{6}"
+            ref={otpRef}
             value={code}
             onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
             hint="6 digits"

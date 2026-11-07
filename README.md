@@ -49,7 +49,7 @@ today:
   gateway makes login return a readable `503` `UPSTREAM_UNAVAILABLE`.
 - Unit and integration tests for the challenge rules, token claims, handlers,
   validators, HTTP contract, issuer fixture, SMS mock contract, and
-  sync/SMS failure paths; 64 frontend tests for formatting, session, request
+  sync/SMS failure paths; 66 frontend tests for formatting, session, request
   handling, sign-in, the wallet and the transaction list.
 - CI in `.github/workflows/ci.yml`: on every push to `main` and every pull
   request it builds and tests .NET (Release) plus the web app, and fails when

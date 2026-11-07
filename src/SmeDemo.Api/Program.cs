@@ -90,6 +90,23 @@ app.UseStatusCodePages(async statusCodeContext =>
 });
 
 app.UseCors();
+
+// Account data must not sit in a shared or disk cache. Artwork keeps its own
+// private cache policy, so only the /me routes are affected.
+app.Use(async (context, next) =>
+{
+    if (context.Request.Path.StartsWithSegments("/api/v1/me"))
+    {
+        context.Response.OnStarting(() =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Task.CompletedTask;
+        });
+    }
+
+    await next();
+});
+
 app.UseAuthentication();
 app.UseMiddleware<OrgClaimMiddleware>();
 app.UseAuthorization();
