@@ -49,9 +49,14 @@ today:
   gateway makes login return a readable `503` `UPSTREAM_UNAVAILABLE`.
 - Unit and integration tests for the challenge rules, token claims, handlers,
   validators, HTTP contract, issuer fixture, SMS mock contract, and
-  sync/SMS failure paths.
+  sync/SMS failure paths; 64 frontend tests for formatting, session, request
+  handling, sign-in, the wallet and the transaction list.
+- CI in `.github/workflows/ci.yml`: on every push to `main` and every pull
+  request it builds and tests .NET (Release) plus the web app, and fails when
+  either DbContext has a model change without a migration.
 
-Not implemented yet: CI.
+Not implemented yet: a real deployment and a real identity provider
+(requirements §3 and §10.6; the demo runs locally from Compose).
 
 ## Quick start
 

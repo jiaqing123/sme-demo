@@ -367,6 +367,33 @@ is saved on scroll and immediately before a tile is followed, kept in
 `sessionStorage` under `sme.wallet.scroll`, restored once after the grid renders,
 and removed on sign-out or session expiry. It is never stored in `localStorage`.
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main`, every pull request, and
+on demand:
+
+- **.NET build and tests** — .NET 10, `dotnet tool restore`, a Release build and
+  `dotnet test`, then `has-pending-model-changes` for both DbContexts.
+- **Web build and tests** — Node 22, `npm ci`, `npm run build`, `npm test`.
+
+Neither job needs SQL Server, Azurite, or any other container: the API tests
+replace the repositories and storage with fakes, the auth tests use EF InMemory,
+and the frontend tests run in jsdom. The commands work locally too, so a red job
+can be reproduced without the runner:
+
+```powershell
+dotnet tool restore
+dotnet build SmeDemo.slnx --configuration Release
+dotnet test SmeDemo.slnx --configuration Release --no-build
+dotnet tool run dotnet-ef migrations has-pending-model-changes `
+  --project src/SmeDemo.Infrastructure --startup-project src/SmeDemo.Infrastructure `
+  --configuration Release --no-build
+cd web
+npm ci
+npm run build
+npm test
+```
+
 ## Everyday commands
 
 ```powershell
@@ -441,7 +468,8 @@ dotnet tool run dotnet-ef migrations has-pending-model-changes `
 ```
 
 It prints `No changes have been made to the model since the last migration` when
-the model and migrations agree. Run it before every commit; a CI check is planned.
+the model and migrations agree. Run it before every commit; CI also runs it on
+every push and pull request.
 
 ## Resetting
 
@@ -480,8 +508,9 @@ reset. Do not use it on a database you care about.
 The web UI is implemented for sign-in with OTP, the card wallet with artwork,
 the card summary plus its paginated, date-grouped transaction list (pending
 badges, `Load more`, retry on append failures, wallet scroll restoration), and
-the profile page. CI is not set up yet; the build, test, and type-check commands
-in this guide run locally. The auth
+the profile page. CI builds and tests both halves on every push and pull request.
+A real deployment and a real identity provider are not here yet (requirements
+§10.6); the demo runs from Compose on one machine. The auth
 issuer, the resource API, and the mock issuer are implemented with their own
 databases, migrations, idempotent scripts, and tests. The mock SMS provider is a
 stateless stand-in with its own contract tests. The API pulls transactions from

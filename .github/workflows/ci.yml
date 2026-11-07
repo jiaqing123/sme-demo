@@ -1,0 +1,86 @@
+name: CI
+
+# Every push to main and every pull request builds and tests both halves of the
+# repository. The jobs are self-contained: the .NET tests use InMemory EF,
+# WebApplicationFactory fakes, and unused connection strings, and the frontend
+# tests run in jsdom, so no MSSQL/Azurite/SMS containers are needed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dotnet:
+    name: .NET build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore local tools
+        run: dotnet tool restore
+
+      - name: Build
+        run: dotnet build SmeDemo.slnx --configuration Release
+
+      - name: Test
+        run: dotnet test SmeDemo.slnx --configuration Release --no-build
+
+      # The generated idempotent SQL is committed, so a model change without a
+      # migration must fail here rather than after deployment (requirements §8.8).
+      - name: Check the API model for pending migrations
+        run: >-
+          dotnet tool run dotnet-ef migrations has-pending-model-changes
+          --project src/SmeDemo.Infrastructure
+          --startup-project src/SmeDemo.Infrastructure
+          --configuration Release --no-build
+
+      - name: Check the auth model for pending migrations
+        run: >-
+          dotnet tool run dotnet-ef migrations has-pending-model-changes
+          --project src/SmeDemo.Auth
+          --startup-project src/SmeDemo.Auth
+          --configuration Release --no-build
+
+  web:
+    name: Web build and tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      # The lock file pins the Linux native binaries (Tailwind oxide, Rollup,
+      # lightningcss), so this is the same dependency set the image builds with.
+      - name: Install
+        run: npm ci
+
+      - name: Type-check and build
+        run: npm run build
+
+      - name: Test
+        run: npm test

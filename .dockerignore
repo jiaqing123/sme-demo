@@ -5,7 +5,9 @@
 web/dist/
 web/coverage/
 .git/
+.github/
 docs/
+progress/
 *.md
 .env
 keys/
