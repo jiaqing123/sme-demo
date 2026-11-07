@@ -76,9 +76,9 @@ Database and storage containers are reachable only on the Compose network.
 
 ```mermaid
 flowchart LR
-    B[Browser] -->|static assets| W[web :8080]
-    B -->|"POST /auth/*"| A[auth :8081]
-    B -->|"GET /api/v1/* + Bearer JWT"| P[api :8082]
+    B[Browser] -->|"static assets + /auth/* + /api/* (origin :8080)"| W[web :8080]
+    W -->|"/auth/*"| A[auth :8081]
+    W -->|"/api/v1/* + Bearer JWT"| P[api :8082]
     A -->|"users, password hashes"| M[(mssql)]
     P -->|"cards, sync state"| M
     P -->|"transactions"| T[(azurite: tables)]
@@ -88,9 +88,10 @@ flowchart LR
     A -->|"POST /messages"| S[sms-mock :8083]
 ```
 
-The browser never talks to a database, the issuer mock, or the SMS mock. `api`
-fetches `auth`'s public keys over the Compose network and never holds a signing
-key.
+The browser never talks to a database, the issuer mock, or the SMS mock, and it
+only needs the `web` origin: nginx reverse-proxies `/auth` and `/api` over the
+Compose network (requirements §9.8). `api` fetches `auth`'s public keys over the
+Compose network and never holds a signing key.
 
 ### 5.3 Trust boundaries
 
@@ -736,12 +737,42 @@ request failure with retry, and expired session.
 ### 9.6 Session handling
 
 - The token is held in `sessionStorage` and attached by a single fetch wrapper.
-- Any `401` clears the token and redirects to `/login` with a short message.
+- A `401` on an authenticated request clears the token and redirects to `/login`
+  with a short message. The sign-in, verify, and resend calls are made without
+  the token, so their `401` is a form error and never triggers that redirect.
 - No silent refresh; expiry after 30 minutes returns the user to sign-in.
 
 ### 9.7 Localisation
 
 English only, `en-AU` formatting: `A$` currency symbol, `DD MMM YYYY` dates.
+Card expiry is the industry `MM/YY` form (`09/28`), not a full date.
+
+### 9.8 Implementation choices
+
+- **One origin.** The browser only talks to `http://localhost:8080`. nginx serves
+  the built SPA and reverse-proxies `/auth/*` to `auth:8081` and `/api/*` to
+  `api:8082`, preserving the original path. Vite's dev server proxies the same
+  paths to `localhost:8081`/`8082`, so application code always uses same-origin
+  relative paths; there is no base-URL configuration and no browser CORS.
+- **Card artwork uses a blob URL.** `art_url` is absolute, but the browser calls
+  its pathname + query through the same origin with the bearer token, because an
+  `<img src>` cannot send an `Authorization` header. The response is converted
+  to a blob object URL, cached per session, and revoked on sign-out or unload. A
+  failed artwork request falls back to a brand-coloured gradient tile with text.
+- **Local time for grouping.** Transactions are grouped by calendar date in the
+  browser's local time zone, not UTC, so a late-evening transaction stays on the
+  day the user saw it. Amounts use `Intl.NumberFormat` with `en-AU` (A$), dates
+  `DD MMM YYYY`, and times `HH:mm`.
+- **401 semantics.** A 401 on an authenticated request clears `sessionStorage`,
+  revokes cached artwork, and redirects to `/login?reason=expired`. The login,
+  verify, and resend calls use the wrapper with `auth: false`; there a 401 is a
+  form error and never clears the session or redirects.
+- **Demo hint source.** The `/login` demo panel is rendered from `/config.js`,
+  which the `web` container generates at start-up from `DEMO_MODE`,
+  `DEMO_USERNAME`, `DEMO_PASSWORD`, and `DEMO_OTP`. With `DEMO_MODE=false` the
+  file contains no credentials and the hint is not shown.
+- **Token storage.** The access token lives in `sessionStorage` only. There is no
+  `localStorage`, no refresh token, and no token in a URL or log.
 
 ## 10. Docker and runtime
 
@@ -759,14 +790,19 @@ English only, `en-AU` formatting: `A$` currency symbol, `DD MMM YYYY` dates.
 | `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
 Startup ordering: `mssql` healthy → `db-migrator` completes → `auth` → `api`;
-`api` also waits for `azurite` and for `issuer-mock` to start. `auth` waits for
-`sms-mock` to start but not for it to become healthy: a broken SMS mock must not
-stop `auth` from starting, because login has to return a readable 503 instead
-(acceptance 17). The issuer dependency is deliberately not a health gate either:
-the sync worker records a failure and the API serves its local feed, so a broken
-issuer cannot stop the API from starting. `issuer-mock` is reachable only on the
-Compose network for `api`; the local `8084` mapping exists for debugging and the
-documented curl examples.
+`api` also waits for `azurite` and for `issuer-mock` to start. `web` starts only
+after both `auth` and `api` are healthy, and its healthcheck requests `/`, which
+proves that nginx is serving the built shell; the reverse proxy itself is
+exercised by the app and by acceptance 18, not by the healthcheck. `auth` waits
+for `sms-mock` to start but not for it to become healthy:
+a broken SMS mock must not stop `auth` from starting, because login has to return
+a readable 503 instead (acceptance 17). The issuer dependency is deliberately not
+a health gate either: the sync worker records a failure and the API serves its
+local feed, so a broken issuer cannot stop the API from starting. `issuer-mock`
+is reachable only on the Compose network for `api`; the local `8084` mapping
+exists for debugging and the documented curl examples. Every published port
+binds to `127.0.0.1`: the demo credential and OTP are part of the documentation,
+so the stack must not be reachable from another machine.
 
 ### 10.2 Compose profiles
 
@@ -782,8 +818,9 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 |----------|---------|---------|
 | `ORG_ID` | auth, api | `sme` |
 | `DEMO_MODE` | auth, web | `true` |
-| `DEMO_USERNAME` / `DEMO_PASSWORD` / `DEMO_PHONE` | auth | demo values |
-| `DEMO_OTP` | auth | `123456` |
+| `DEMO_USERNAME` / `DEMO_PASSWORD` | auth, web | demo values; web publishes them only as the `/login` hint |
+| `DEMO_PHONE` | auth | demo value |
+| `DEMO_OTP` | auth, web | `123456`; web publishes it only as the `/login` hint |
 | `JWT_ISSUER` / `JWT_AUDIENCE` / `JWT_TTL` | auth, api | `http://auth:8081`, `sme-demo-api`, `30m` |
 | `AUTH_METADATA_URL` | api | `http://auth:8081/.well-known/openid-configuration` |
 | `SMS_PROVIDER_URL` | auth | `http://sms-mock:8083` |
@@ -816,8 +853,10 @@ is baked into an image.
 ### 10.5 Offline behaviour
 
 Images are pulled and NuGet/npm dependencies restored once during
-`docker compose build`, when a network is available. After that the demo runs
-with no outbound traffic: no external SMS, no CDN assets, no remote fonts.
+`docker compose build`, when a network is available. The `web` image runs
+`npm ci` inside its Node build stage and copies only the built assets into the
+nginx runtime stage. After that the demo runs with no outbound traffic: no
+external SMS, no CDN assets, no remote fonts, and no runtime npm access.
 
 ### 10.6 Deployment configuration
 
@@ -912,6 +951,8 @@ The demo is done when all of these hold on a clean machine:
 17. Stopping `sms-mock` makes login return `503` with `UPSTREAM_UNAVAILABLE` and
     a readable message, not `500`; `auth` stays healthy, and starting
     `sms-mock` again restores login.
+18. `http://localhost:8080` serves the SPA directly and forwards `/auth/*` and
+    `/api/*` to their services; the browser never needs to reach 8081 or 8082.
 
 ## 13. Risks and decisions
 

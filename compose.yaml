@@ -1,5 +1,11 @@
 name: sme-demo
 
+# Published ports bind to 127.0.0.1 on purpose. The demo ships a documented,
+# public password (demo / Demo_Passw0rd!) and a fixed OTP, so the services must
+# not be reachable from another machine. Containers reach each other over the
+# `sme` network and their healthchecks run inside the container, so nothing in
+# the stack depends on the host bindings. Override these mappings locally if a
+# remote browser or device has to reach a service.
 services:
   mssql:
     image: mcr.microsoft.com/mssql/server:2022-latest
@@ -136,7 +142,7 @@ services:
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
       SMS_PROVIDER_URL: "${SMS_PROVIDER_URL:-http://sms-mock:8083}"
     ports:
-      - "8081:8081"
+      - "127.0.0.1:8081:8081"
     volumes:
       - auth-keys:/keys
     depends_on:
@@ -172,7 +178,7 @@ services:
     environment:
       ASPNETCORE_URLS: "http://+:8083"
     ports:
-      - "8083:8083"
+      - "127.0.0.1:8083:8083"
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -195,7 +201,7 @@ services:
       ASPNETCORE_URLS: "http://+:8084"
       ISSUER_API_KEY: "${ISSUER_API_KEY:-demo-issuer-key}"
     ports:
-      - "8084:8084"
+      - "127.0.0.1:8084:8084"
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -235,7 +241,7 @@ services:
       ISSUER_SYNC_INTERVAL: "${ISSUER_SYNC_INTERVAL:-5m}"
       ISSUER_SYNC_ENABLED: "${ISSUER_SYNC_ENABLED:-true}"
     ports:
-      - "8082:8082"
+      - "127.0.0.1:8082:8082"
     depends_on:
       mssql:
         condition: service_healthy
@@ -262,6 +268,36 @@ services:
       timeout: 5s
       retries: 18
       start_period: 60s
+    networks:
+      - sme
+
+  # React SPA built to static assets and served by nginx on 8080. nginx also
+  # reverse-proxies /auth and /api so the browser only ever talks to one origin
+  # (requirements §9.1). /config.js is generated at container start from the
+  # DEMO_* values below.
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: sme-demo-web:local
+    environment:
+      DEMO_MODE: "${DEMO_MODE:-true}"
+      DEMO_USERNAME: "${DEMO_USERNAME:-demo}"
+      DEMO_PASSWORD: "${DEMO_PASSWORD:-Demo_Passw0rd!}"
+      DEMO_OTP: "${DEMO_OTP-123456}"
+    ports:
+      - "127.0.0.1:8080:80"
+    depends_on:
+      auth:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
     networks:
       - sme
 

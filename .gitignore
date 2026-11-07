@@ -28,3 +28,8 @@ temp/
 
 # Local working notes; never committed.
 progress/
+
+# Web (React/Vite)
+node_modules/
+web/dist/
+web/coverage/

@@ -16,7 +16,8 @@ A demo system for small and medium-sized businesses, built as three layers:
 
 ## Status
 
-The auth issuer and the resource API are implemented. What exists today:
+The auth issuer, the resource API, and the web UI are implemented. What exists
+today:
 
 - The solution, central package management, and the licensing pins.
 - The EF Core model for cards and issuer sync state.
@@ -25,6 +26,11 @@ The auth issuer and the resource API are implemented. What exists today:
 - One-shot `db-migrator` and `db-migrator-auth` containers plus `db-grants`,
   which gives each application a read/write-only login, wired into Compose with
   SQL Server.
+- `web/` on port 8080: a React + TypeScript + Vite SPA built to static assets and
+  served by nginx. nginx also reverse-proxies `/auth` and `/api`, so the browser
+  only needs one origin. Sign-in (password then OTP), the card wallet with
+  artwork fetched as blob URLs, the card summary page, and the profile page are
+  implemented; the transactions list is the next web slice.
 - `SmeDemo.Auth` on port 8081: password login, in-memory OTP challenges, RS256
   JWT issuance, OIDC discovery, JWKS, `/auth/userinfo`, health check, and a
   persisted signing key.
@@ -44,7 +50,7 @@ The auth issuer and the resource API are implemented. What exists today:
   validators, HTTP contract, issuer fixture, SMS mock contract, and
   sync/SMS failure paths.
 
-Not implemented yet: the web UI.
+Not implemented yet: CI.
 
 ## Quick start
 
@@ -53,10 +59,14 @@ Copy-Item .env.example .env      # then change the passwords
 docker compose up -d --build
 ```
 
-The demo login is `demo` / `Demo_Passw0rd!` with OTP `123456`. `auth` is on
-port 8081, `api` on port 8082 (`/healthz`, `/api/v1/me`, `/api/v1/me/cards`),
-`sms-mock` on port 8083, and `issuer-mock` on port 8084. Details, the smoke
-tests, and the schema-change workflow are in
+Open `http://localhost:8080`. The demo login is `demo` / `Demo_Passw0rd!` with
+OTP `123456`; the sign-in page also shows these demo hints while `DEMO_MODE` is
+enabled. Port 8080 serves the SPA and proxies `/auth` and `/api`, so that is the
+only URL a browser needs. `auth` is also published on 8081, `api` on 8082
+(`/healthz`, `/api/v1/me`, `/api/v1/me/cards`), `sms-mock` on 8083, and
+`issuer-mock` on 8084 for debugging. Every published port binds to `127.0.0.1`,
+so the stack is reachable from this machine only: the demo password and OTP are
+public by design. Details, the smoke tests, and the schema-change workflow are in
 [`docs/development.md`](docs/development.md).
 
 ## Repository layout
@@ -71,6 +81,7 @@ src/SmeDemo.Application             handlers, DTOs, validators, ports
 src/SmeDemo.Domain                  entities and invariants
 src/SmeDemo.Infrastructure          EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                    independent JWT issuer, own DbContext and migration
+web/                                React + TypeScript + Vite SPA (nginx in Compose)
 tools/SmsMock                       stand-in SMS gateway that logs each message
 tools/IssuerMock                    deterministic card-issuer stand-in
 tests/IssuerMock.Tests              issuer fixture/auth/ordering tests
@@ -84,7 +95,7 @@ tools/Migrator                      one-shot schema applier
 db/migrations/api/                  generated idempotent API SQL scripts
 db/migrations/auth/                 generated idempotent auth SQL scripts
 db/bootstrap/                       read/write-only application login script
-compose.yaml                        SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
+compose.yaml                        SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API, web
 ```
 
 ## Audience

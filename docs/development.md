@@ -20,6 +20,7 @@ src/SmeDemo.Application            MediatR handlers, DTOs, validators, port inte
 src/SmeDemo.Domain                 entities and invariants
 src/SmeDemo.Infrastructure         EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                   independent JWT issuer (own database and keys)
+web/                               React 18 + TypeScript + Vite SPA; nginx serves it in Compose
 tools/SmsMock                      stand-in SMS provider that logs messages
 tools/IssuerMock                   stand-in card issuer serving the deterministic fixture
 tools/Migrator                     one-shot schema applier (runs in its own container)
@@ -42,6 +43,13 @@ docs/                              requirements, licensing, workshop
 Copy-Item .env.example .env      # then change the passwords
 docker compose up -d --build
 ```
+
+Published ports are bound to `127.0.0.1`, so `localhost:8081`–`8084` work from
+this machine but not from another host on the network. The demo password and
+OTP are documented in this repository and therefore public; loopback binding
+keeps them from becoming a login path into someone else's machine. If a remote
+device has to reach the stack, override the port mappings in a local compose
+override file rather than committing a `0.0.0.0` binding.
 
 The two migrator containers run once and exit, then `db-grants` creates the
 application logins. `auth` and `api` start only after the migrators and grants
@@ -279,6 +287,69 @@ this is a development setting, not something to carry into a deployed
 environment. If metadata retrieval fails, the API rejects every token and its
 log shows a metadata/connection error.
 
+## Web front-end
+
+The browser UI lives in `web/`. It is a React 18 + TypeScript + Vite SPA with
+Tailwind CSS, built to static assets and served by nginx in Compose. The browser
+only ever talks to port 8080: nginx serves the SPA and reverse-proxies `/auth/*`
+to `auth:8081` and `/api/*` to `api:8082`. Requests in the source are always
+same-origin relative paths, so there is no base URL or CORS configuration to
+maintain.
+
+### Local development
+
+```powershell
+cd web
+npm ci
+npm run dev
+```
+
+Open `http://localhost:5173`. The Vite dev server proxies `/auth` to
+`http://localhost:8081` and `/api` to `http://localhost:8082`, so `auth` and
+`api` must be running (`docker compose up -d auth api`) for login and data to
+work. `web/public/config.js` is the committed development default for the demo
+hint.
+
+```powershell
+npm run build        # tsc --noEmit && vite build, output in web/dist
+npm test             # Vitest + Testing Library
+npx tsc --noEmit     # type check on its own
+```
+
+### Container build and runtime configuration
+
+```powershell
+docker compose up -d --build web
+```
+
+The Dockerfile is multi-stage: `node:22-bookworm-slim` runs `npm ci` and the
+build, then the static output is copied into `nginx:1.27-alpine`. npm packages
+are fetched during `docker compose build` only; the runtime image makes no
+outbound requests.
+
+`/config.js` is generated when the container starts by
+`web/nginx/40-runtime-config.sh` from `DEMO_MODE`, `DEMO_USERNAME`,
+`DEMO_PASSWORD`, and `DEMO_OTP`. `DEMO_MODE` must be exactly `true` for the file
+to contain credentials. To change the demo hint:
+
+```powershell
+# Edit .env, then recreate only web so the entrypoint runs again.
+docker compose up -d --force-recreate web
+```
+
+`/config.js` is served with `Cache-Control: no-store`; `/assets/*` is immutable
+because Vite fingerprints those files; `/index.html` and the SPA fallback are
+`no-cache`. The image also proxies with Docker's embedded DNS
+(`resolver 127.0.0.11`), so recreating `auth` or `api` does not leave nginx
+pointing at a stale container IP. auth's own liveness probe remains `/healthz`
+on 8081; the proxied application routes under `/auth/` are forwarded unchanged.
+
+Session behaviour: the token is kept in `sessionStorage` and attached by a
+single fetch wrapper. An authenticated 401 clears the session and redirects to
+`/login?reason=expired`; a 401 from login, verify, or resend is only a form
+error. Card artwork is fetched with the bearer token and converted to a blob
+URL, because an `<img>` request cannot carry an `Authorization` header.
+
 ## Everyday commands
 
 ```powershell
@@ -382,13 +453,20 @@ reset. Do not use it on a database you care about.
 | `issuer_sync` rows are `failed` | issuer-mock stopped, wrong `ISSUER_API_KEY`, or issuer returned an invalid payload | check `docker compose ps issuer-mock` and `docker compose logs api`; curl the issuer endpoint with the configured key; the API keeps serving the local feed meanwhile |
 | Wallet has cards but no transactions after a fresh start | the first sync has not run yet, or it failed | wait for `ISSUER_SYNC_INTERVAL`, check `app.issuer_sync`, and re-run with a short `ISSUER_SYNC_INTERVAL=10s` if needed |
 | Issuer returns 401 | `ISSUER_API_KEY` differs between `api` and `issuer-mock` | set one value for both in `.env` and recreate both containers |
+| `web` is up but the page is blank | the built assets are missing or the module failed to load | check the browser console and `docker compose logs web`; rebuild with `docker compose up -d --build web` |
+| `http://localhost:8080/auth/...` or `/api/...` returns 502 | nginx cannot resolve or reach `auth`/`api` | `docker compose ps auth api`; wait for both to be healthy, then `docker compose restart web` |
+| Demo hint is stale or missing | `/config.js` was cached, or the container was not recreated after changing `.env` | reload with dev tools open, then `docker compose up -d --force-recreate web` |
+| `docker compose build web` fails on `npm ci` | no network during the image build | connect to the registry, or run `cd web; npm ci` locally first to warm the npm cache |
 
 ## What is not here yet
 
-The web UI is not implemented. The auth issuer, the resource API, and the mock
-issuer are implemented with their own databases, migrations, idempotent scripts,
-and tests. The mock SMS provider is a stateless stand-in with its own contract
-tests. The API pulls transactions from
+The web UI is implemented for sign-in with OTP, the card wallet with artwork, the
+card summary page, and the profile page. The card transactions list (date
+grouping, `Load more`, pending badges) is the next web slice. CI is not set up
+yet; the build, test, and type-check commands in this guide run locally. The auth
+issuer, the resource API, and the mock issuer are implemented with their own
+databases, migrations, idempotent scripts, and tests. The mock SMS provider is a
+stateless stand-in with its own contract tests. The API pulls transactions from
 `issuer-mock` via `IssuerSyncService`; issuer failures degrade to the last good
 local feed rather than failing requests. `auth` posts codes to `sms-mock`; an SMS
 failure degrades login to a readable 503 rather than a 500.
