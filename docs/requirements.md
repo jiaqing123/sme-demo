@@ -200,9 +200,9 @@ sequenceDiagram
     participant S as sms-mock
     B->>A: POST /auth/login {username, password}
     A->>A: verify password hash
-    A->>A: create challenge (5 min TTL)
     A->>S: POST /messages {to, text}
     S-->>A: 202 Accepted
+    A->>A: create challenge (5 min TTL), only after the send succeeds
     A-->>B: 200 {challenge_id, expires_in, resend_in}
     B->>A: POST /auth/challenges/{id}/verify {code}
     A->>A: check code, attempts, expiry
@@ -214,7 +214,7 @@ sequenceDiagram
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/auth/login` | Verify username/password, create MFA challenge, trigger SMS. |
+| POST | `/auth/login` | Verify username/password, send the SMS, create the MFA challenge only when the send succeeds. |
 | POST | `/auth/challenges/{challenge_id}/verify` | Verify OTP, return access token. |
 | POST | `/auth/challenges/{challenge_id}/resend` | Re-send OTP, subject to cooldown. |
 | GET | `/auth/userinfo` | Bearer-protected profile (`id`, `name`, `phone`, `org`) read from `auth.users`; the token is verified locally against the current and previous signing keys. |
@@ -251,6 +251,10 @@ With `DEMO_MODE=false`, the fixed OTP path is refused at startup and a real
 `ISmsProvider` must be configured. This prevents the fixed code from ever
 becoming a back door.
 
+Demo mode changes which code is sent, not whether a message is sent: the fixed
+`DEMO_OTP` is still delivered through the configured provider, so it appears in
+`sms-mock`'s log like any other code.
+
 ### 6.5 SMS provider seam
 
 `auth` depends on:
@@ -259,9 +263,31 @@ becoming a back door.
 ISmsProvider.Send(phoneNumber, message, cancellationToken) -> providerMessageId
 ```
 
-The only demo implementation posts to `SMS_PROVIDER_URL` (`sms-mock`). Replacing
-it with Twilio, SNS, or an internal gateway means one adapter plus one
-environment variable.
+The demo implementation posts to `SMS_PROVIDER_URL` (`http://sms-mock:8083` in
+Compose). Replacing it with Twilio, SNS, or an internal gateway means one adapter
+plus one environment variable.
+
+`POST /messages` accepts `{ "to": "<phone>", "text": "<message>" }`
+(`Content-Type: application/json`). It validates only the envelope: `to` is
+required and 1–32 characters after trimming, `text` is required and 1–1600
+characters after trimming. A valid message returns `202 Accepted` with a
+`text/plain` provider message id shaped `sms-<32 lowercase hex>`. Invalid input
+returns `400` with the usual `VALIDATION_ERROR` envelope and the offending field
+under `errors` (`to`, `text`, or `body` when the JSON cannot be read).
+
+The mock logs every accepted message in plain text
+(`SMS to <phone>: <text>`). That is deliberate: the demo OTP has to be readable
+in `docker compose logs sms-mock`. Rejected requests are not logged, and the
+caller IP is not recorded. Unlike the rest of the system, this demo-only service
+does deliberately record the recipient phone number and message text, including
+the OTP; it has no other delivery mechanism. The request body is capped at 64 KB.
+
+When the gateway is unreachable, times out, or returns a non-2xx status, login
+and resend return `503` with code `UPSTREAM_UNAVAILABLE` and the message
+"The SMS provider is unavailable. Try again shortly." A login that fails this way
+does not leave a challenge behind; a failed resend keeps the already-updated
+challenge, so the user waits out the 60 second cooldown. Caller cancellation is
+never translated into a 503.
 
 ### 6.6 Token specification
 
@@ -733,11 +759,14 @@ English only, `en-AU` formatting: `A$` currency symbol, `DD MMM YYYY` dates.
 | `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
 Startup ordering: `mssql` healthy → `db-migrator` completes → `auth` → `api`;
-`api` also waits for `azurite` and for `issuer-mock` to start. The issuer
-dependency is deliberately not a health gate: the sync worker records a failure
-and the API serves its local feed, so a broken issuer cannot stop the API from
-starting. `issuer-mock` is reachable only on the Compose network for `api`; the
-local `8084` mapping exists for debugging and the documented curl examples.
+`api` also waits for `azurite` and for `issuer-mock` to start. `auth` waits for
+`sms-mock` to start but not for it to become healthy: a broken SMS mock must not
+stop `auth` from starting, because login has to return a readable 503 instead
+(acceptance 17). The issuer dependency is deliberately not a health gate either:
+the sync worker records a failure and the API serves its local feed, so a broken
+issuer cannot stop the API from starting. `issuer-mock` is reachable only on the
+Compose network for `api`; the local `8084` mapping exists for debugging and the
+documented curl examples.
 
 ### 10.2 Compose profiles
 
@@ -829,7 +858,9 @@ Implemented:
 - CORS allowlist limited to the web origin.
 - No PAN, CVV, or PIN anywhere in code, seed data, or logs.
 - Card art served only through the API; storage credentials stay server-side.
-- Phone numbers and tokens redacted from logs.
+- Application logs redact phone numbers and tokens. The demo-only `sms-mock`
+  deliberately records the recipient and message text (including the OTP); that
+  is its delivery mechanism and is documented in §6.5.
 
 Accepted for the demo, listed so nobody mistakes them for production:
 
@@ -875,6 +906,12 @@ The demo is done when all of these hold on a clean machine:
 14. `dotnet ef migrations has-pending-model-changes` passes on a clean checkout.
 15. The API's database login cannot execute DDL: `CREATE TABLE` fails with a
     permission error.
+16. After a full stack start, a demo login leaves the phone number and a message
+    containing `123456` in the `sms-mock` log, while the OTP behaviour and
+    challenge rules are unchanged.
+17. Stopping `sms-mock` makes login return `503` with `UPSTREAM_UNAVAILABLE` and
+    a readable message, not `500`; `auth` stays healthy, and starting
+    `sms-mock` again restores login.
 
 ## 13. Risks and decisions
 

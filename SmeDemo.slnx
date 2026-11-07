@@ -8,6 +8,7 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/IssuerMock.Tests/IssuerMock.Tests.csproj" />
+    <Project Path="tests/SmsMock.Tests/SmeDemo.SmsMock.Tests.csproj" />
     <Project Path="tests/Migrator.Tests/Migrator.Tests.csproj" />
     <Project Path="tests/SmeDemo.Api.Tests/SmeDemo.Api.Tests.csproj" />
     <Project Path="tests/SmeDemo.Application.Tests/SmeDemo.Application.Tests.csproj" />
@@ -20,5 +21,8 @@
   </Folder>
   <Folder Name="/tools/Migrator/">
     <Project Path="tools/Migrator/SmeDemo.Migrator.csproj" />
+  </Folder>
+  <Folder Name="/tools/SmsMock/">
+    <Project Path="tools/SmsMock/SmeDemo.SmsMock.csproj" />
   </Folder>
 </Solution>

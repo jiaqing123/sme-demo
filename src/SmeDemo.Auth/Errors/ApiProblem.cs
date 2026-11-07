@@ -25,6 +25,12 @@ public sealed record ApiProblem(
     public static ApiProblem RateLimited(string message) =>
         new(StatusCodes.Status429TooManyRequests, ErrorCodes.RateLimited, message);
 
+    public static ApiProblem UpstreamUnavailable() =>
+        new(
+            StatusCodes.Status503ServiceUnavailable,
+            ErrorCodes.UpstreamUnavailable,
+            "The SMS provider is unavailable. Try again shortly.");
+
     public static ApiProblem Internal() =>
         new(StatusCodes.Status500InternalServerError, ErrorCodes.Internal, "An unexpected error occurred.");
 }

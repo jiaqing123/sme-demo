@@ -35,10 +35,16 @@ The auth issuer and the resource API are implemented. What exists today:
   API-key auth, and the issuer health check. `IssuerSyncService` pulls the feed at
   start-up and every `ISSUER_SYNC_INTERVAL`; a failed issuer call is recorded in
   `app.issuer_sync` and never breaks the local read path.
+- `SmeDemo.SmsMock` on port 8083: the HTTP SMS gateway used by `auth`. It
+  validates `{ to, text }`, returns a text/plain provider id, and logs each
+  accepted message in plain text so the demo OTP is visible in
+  `docker compose logs sms-mock`. `auth` now posts codes over HTTP; a stopped
+  gateway makes login return a readable `503` `UPSTREAM_UNAVAILABLE`.
 - Unit and integration tests for the challenge rules, token claims, handlers,
-  validators, HTTP contract, issuer fixture, and sync validation/failure paths.
+  validators, HTTP contract, issuer fixture, SMS mock contract, and
+  sync/SMS failure paths.
 
-Not implemented yet: the web UI and the SMS mock.
+Not implemented yet: the web UI.
 
 ## Quick start
 
@@ -49,8 +55,9 @@ docker compose up -d --build
 
 The demo login is `demo` / `Demo_Passw0rd!` with OTP `123456`. `auth` is on
 port 8081, `api` on port 8082 (`/healthz`, `/api/v1/me`, `/api/v1/me/cards`),
-and `issuer-mock` on port 8084. Details, the smoke tests, and the
-schema-change workflow are in [`docs/development.md`](docs/development.md).
+`sms-mock` on port 8083, and `issuer-mock` on port 8084. Details, the smoke
+tests, and the schema-change workflow are in
+[`docs/development.md`](docs/development.md).
 
 ## Repository layout
 
@@ -64,8 +71,10 @@ src/SmeDemo.Application             handlers, DTOs, validators, ports
 src/SmeDemo.Domain                  entities and invariants
 src/SmeDemo.Infrastructure          EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                    independent JWT issuer, own DbContext and migration
+tools/SmsMock                       stand-in SMS gateway that logs each message
 tools/IssuerMock                    deterministic card-issuer stand-in
 tests/IssuerMock.Tests              issuer fixture/auth/ordering tests
+tests/SmsMock.Tests                 SMS mock HTTP contract tests
 tests/Migrator.Tests                migrator script tests
 tests/SmeDemo.Application.Tests     handler and validator tests
 tests/SmeDemo.Api.Tests             HTTP contract tests through WebApplicationFactory
@@ -75,7 +84,7 @@ tools/Migrator                      one-shot schema applier
 db/migrations/api/                  generated idempotent API SQL scripts
 db/migrations/auth/                 generated idempotent auth SQL scripts
 db/bootstrap/                       read/write-only application login script
-compose.yaml                        SQL Server, migrators, grants, Azurite, issuer-mock, auth, API
+compose.yaml                        SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
 ```
 
 ## Audience

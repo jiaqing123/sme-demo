@@ -20,17 +20,19 @@ src/SmeDemo.Application            MediatR handlers, DTOs, validators, port inte
 src/SmeDemo.Domain                 entities and invariants
 src/SmeDemo.Infrastructure         EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                   independent JWT issuer (own database and keys)
+tools/SmsMock                      stand-in SMS provider that logs messages
 tools/IssuerMock                   stand-in card issuer serving the deterministic fixture
 tools/Migrator                     one-shot schema applier (runs in its own container)
 db/migrations/api/*.sql            generated, committed, idempotent API schema scripts
 db/migrations/auth/*.sql           generated, committed, idempotent auth schema scripts
 db/bootstrap/app-logins.sql        creates the read/write-only application logins
 tests/IssuerMock.Tests             fixture contract, auth and ordering tests
+tests/SmsMock.Tests                SMS mock HTTP contract tests
 tests/SmeDemo.Application.Tests    handler and validator unit tests
 tests/SmeDemo.Api.Tests            integration tests through WebApplicationFactory
 tests/SmeDemo.Auth.Tests           challenge-rule and token-claim tests
 tests/SmeDemo.Infrastructure.Tests IssuerSyncService tests against fake ports/InMemory EF
-compose.yaml                       SQL Server, migrators, grants, Azurite, issuer-mock, auth, API
+compose.yaml                       SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
 docs/                              requirements, licensing, workshop
 ```
 
@@ -214,6 +216,42 @@ On a fresh volume, expect three `ok` rows and 14/13/13 transactions for the thre
 cards. While the issuer is down, expect `failed` rows, a handled warning in the
 API log, and unchanged transaction responses.
 
+### Mock SMS provider
+
+`sms-mock` is a separate ASP.NET Core service on port 8083. `auth` posts every
+verification code to `SMS_PROVIDER_URL`, which Compose defaults to
+`http://sms-mock:8083`. The mock does not deliver anything: it validates the
+message envelope and logs it, so the log is where the demo OTP comes from.
+
+```powershell
+# Liveness.
+Invoke-RestMethod http://localhost:8083/healthz
+
+# Send a message by hand.
+$response = Invoke-WebRequest -Method Post -Uri http://localhost:8083/messages `
+  -ContentType 'application/json' `
+  -Body '{"to":"+61400000000","text":"Your SME Demo verification code is 123456. It expires in 5 minutes."}'
+$response.StatusCode        # 202
+$response.Content           # sms-<32 lowercase hex>
+
+# Every accepted message is in the log, in plain text.
+docker compose logs sms-mock | Select-String 'SMS to'
+```
+
+The request body is `{ "to": ..., "text": ... }`; both are required and trimmed
+(`to` up to 32 characters, `text` up to 1600). Invalid input returns `400` with
+the standard `VALIDATION_ERROR` envelope; the body itself is capped at 64 KB. Demo mode still sends: the fixed
+`123456` is posted to the mock exactly like a random code, so the demo log always
+shows `Your SME Demo verification code is 123456`. With `DEMO_MODE=false` the
+code is random and must be read from the same log before calling verify.
+
+If `sms-mock` is stopped, `auth` stays healthy but login and resend return `503`
+with code `UPSTREAM_UNAVAILABLE` and a readable message
+("The SMS provider is unavailable. Try again shortly."). Start it again and login
+recovers. A failed login does not create a challenge; a failed resend keeps the
+already-updated challenge, so the next attempt has to wait for the 60 second
+cooldown.
+
 ### Database logins (acceptance 15)
 
 The one-shot `db-grants` service runs `db/bootstrap/app-logins.sql` after both
@@ -337,6 +375,7 @@ reset. Do not use it on a database you care about.
 | Login failed for `sme_api_app` / `sme_auth_app` | `db-grants` did not run, or the `.env` password changed after it did | check `docker compose logs db-grants`; re-run `docker compose up -d db-grants` |
 | `has-pending-model-changes` fails | entity edited without a migration | add the migration, do not hand-edit the snapshot |
 | Auth exits at start-up | `DEMO_MODE=false` with `DEMO_OTP` set, or no `SMS_PROVIDER_URL` | remove `DEMO_OTP`, set the SMS URL, or enable demo mode |
+| Login or resend returns `503` `UPSTREAM_UNAVAILABLE` | `sms-mock` is stopped or `SMS_PROVIDER_URL` is wrong | `docker compose ps sms-mock`, check `docker compose logs auth` and the URL, then `docker compose start sms-mock` |
 | Auth cannot write `/keys` | key volume not writable by the app user | `docker compose down -v` to recreate the volume |
 | `api` unhealthy or restarts | Azurite/Table/Blob not ready, or SQL login lacks rights | check `docker compose logs api`: the seeder retries 20 times, then stops the host; check `docker compose ps azurite` and `db-grants` |
 | Every API call returns 401 | metadata fetch from `auth` failed, or `AUTH_METADATA_URL`/issuer/audience mismatched | check `docker compose logs api`; confirm `AUTH_REQUIRE_HTTPS_METADATA=false` in Compose and that auth is healthy |
@@ -346,8 +385,10 @@ reset. Do not use it on a database you care about.
 
 ## What is not here yet
 
-The web UI and the SMS mock are not implemented. The auth issuer, the resource
-API, and the mock issuer are implemented with their own databases, migrations,
-idempotent scripts, and tests. The API pulls transactions from `issuer-mock` via
-`IssuerSyncService`; issuer failures degrade to the last good local feed rather
-than failing requests.
+The web UI is not implemented. The auth issuer, the resource API, and the mock
+issuer are implemented with their own databases, migrations, idempotent scripts,
+and tests. The mock SMS provider is a stateless stand-in with its own contract
+tests. The API pulls transactions from
+`issuer-mock` via `IssuerSyncService`; issuer failures degrade to the last good
+local feed rather than failing requests. `auth` posts codes to `sms-mock`; an SMS
+failure degrades login to a readable 503 rather than a 500.

@@ -73,8 +73,21 @@ public sealed class AuthFlowService
         }
 
         var code = _options.DemoMode ? _options.DemoOtp : GenerateCode();
+
+        // Send before creating the challenge: a failed send must not leave an
+        // orphan challenge the user can never complete.
+        try
+        {
+            await SendCodeAsync(user.Phone, code, cancellationToken);
+        }
+        catch (SmsDeliveryException)
+        {
+            // No code, phone number, or provider body in the log.
+            _logger.LogWarning("Login failed because the SMS provider is unavailable.");
+            return OperationResult<ChallengeResponse>.Failure(ApiProblem.UpstreamUnavailable());
+        }
+
         var ticket = _challenges.Create(user.Id, code);
-        await SendCodeAsync(user.Phone, code, cancellationToken);
 
         return OperationResult<ChallengeResponse>.Success(
             new ChallengeResponse(
@@ -170,7 +183,17 @@ public sealed class AuthFlowService
                 ApiProblem.Unauthenticated("The account is not available."));
         }
 
-        await SendCodeAsync(user.Phone, result.Code!, cancellationToken);
+        try
+        {
+            await SendCodeAsync(user.Phone, result.Code!, cancellationToken);
+        }
+        catch (SmsDeliveryException)
+        {
+            // The challenge already holds the new code (ChallengeStore semantics
+            // are unchanged); the user waits out the cooldown and resends.
+            _logger.LogWarning("Resend failed because the SMS provider is unavailable.");
+            return OperationResult<ChallengeResponse>.Failure(ApiProblem.UpstreamUnavailable());
+        }
 
         return OperationResult<ChallengeResponse>.Success(
             new ChallengeResponse(
