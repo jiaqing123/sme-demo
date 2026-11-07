@@ -118,8 +118,8 @@ public sealed class TableTransactionStore : ITransactionStore
         ["Merchant"] = record.Merchant,
         ["Status"] = record.Status,
         ["OccurredAt"] = record.OccurredAt,
-        ["PostedAt"] = record.OccurredAt,
-        ["IssuerPayload"] = "{}",
+        ["PostedAt"] = record.PostedAt,
+        ["IssuerPayload"] = record.IssuerPayload,
         ["IngestedAt"] = DateTimeOffset.UtcNow,
     };
 
@@ -132,5 +132,9 @@ public sealed class TableTransactionStore : ITransactionStore
         entity.GetString("Direction") ?? string.Empty,
         entity.GetString("Merchant") ?? string.Empty,
         entity.GetString("Status") ?? string.Empty,
-        entity.GetDateTimeOffset("OccurredAt") ?? DateTimeOffset.UnixEpoch);
+        entity.GetDateTimeOffset("OccurredAt") ?? DateTimeOffset.UnixEpoch,
+        entity.GetDateTimeOffset("PostedAt")
+            ?? entity.GetDateTimeOffset("OccurredAt")
+            ?? DateTimeOffset.UnixEpoch,
+        entity.GetString("IssuerPayload") ?? "{}");
 }

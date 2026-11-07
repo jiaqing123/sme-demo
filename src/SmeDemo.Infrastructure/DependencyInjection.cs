@@ -3,6 +3,7 @@ using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SmeDemo.Application.Abstractions;
+using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Persistence;
 using SmeDemo.Infrastructure.Storage;
 
@@ -36,6 +37,18 @@ public static class DependencyInjection
         services.AddScoped<ICardRepository, EfCardRepository>();
         services.AddSingleton<ITransactionStore, TableTransactionStore>();
         services.AddSingleton<IBlobStore, BlobCardArtStore>();
+
+        if (options.IssuerSyncEnabled)
+        {
+            services.AddHttpClient<IIssuerClient, IssuerHttpClient>(client =>
+            {
+                // The mock issuer is a plain-HTTP internal dependency. The API
+                // key is a demo value supplied by Compose and never logged.
+                client.BaseAddress = new Uri(options.IssuerBaseUrl.TrimEnd('/') + "/");
+                client.Timeout = TimeSpan.FromSeconds(10);
+                client.DefaultRequestHeaders.Add("X-Api-Key", options.IssuerApiKey);
+            });
+        }
 
         return services;
     }

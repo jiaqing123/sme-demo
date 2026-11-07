@@ -77,19 +77,24 @@ internal static class TestData
             displayOrder,
             $"art-{last4}.svg");
 
-    public static TransactionRecord CreateTransaction(Guid cardId, int sequence) =>
-        new(
-            TransactionKeys.CreateRowKey(
-                new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero).AddHours(-sequence),
-                Guid.Parse($"00000000-0000-4000-8000-{sequence:D12}")),
+    public static TransactionRecord CreateTransaction(Guid cardId, int sequence)
+    {
+        var occurredAt = new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero).AddHours(-sequence);
+        var transactionId = Guid.Parse($"00000000-0000-4000-8000-{sequence:D12}");
+
+        return new TransactionRecord(
+            TransactionKeys.CreateRowKey(occurredAt, transactionId),
             cardId,
-            Guid.Parse($"00000000-0000-4000-8000-{sequence:D12}"),
+            transactionId,
             1000 + sequence,
             "AUD",
             "debit",
             "Woolworths",
             "posted",
-            new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero).AddHours(-sequence));
+            occurredAt,
+            occurredAt.AddHours(2),
+            "{}");
+    }
 
     public static IMapper CreateMapper()
     {

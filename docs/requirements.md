@@ -115,7 +115,7 @@ key.
 | Persistence (relational) | EF Core 10 + `Microsoft.EntityFrameworkCore.SqlServer` |
 | Persistence (transaction feed) | `Azure.Data.Tables` against Azurite |
 | Blob storage | `Azure.Storage.Blobs` |
-| Outbound HTTP | `IHttpClientFactory` + `Microsoft.Extensions.Http.Resilience` |
+| Outbound HTTP | `IHttpClientFactory` (`Microsoft.Extensions.Http`); bounded startup retries live in `IssuerSyncService` |
 | Authentication | `Microsoft.AspNetCore.Authentication.JwtBearer` |
 | Token creation | `Microsoft.IdentityModel.JsonWebTokens` |
 | Password hashing | `Microsoft.AspNetCore.Identity.PasswordHasher<T>` (PBKDF2) |
@@ -415,7 +415,8 @@ more than one store.
 | `last_error` | nvarchar(512), null | Redacted message. |
 
 This is the only table that records integration state, and it is what makes the
-issuer dependency visible rather than implicit.
+issuer dependency visible rather than implicit. `last_synced_at` is the time of
+the last attempt, successful or not; `last_status` says which it was.
 
 ### 8.5 `transactions` (Table Storage)
 
@@ -441,6 +442,11 @@ Entity fields: `OrgId`, `TransactionId`, `AmountMinor`, `Currency`, `Direction`,
 `Merchant`, `Status`, `OccurredAt`, `PostedAt`, `IssuerPayload` (string, the raw
 issuer JSON), `IngestedAt`. Entities are upserted by `RowKey`, so re-syncing the
 same transaction is idempotent.
+
+`PostedAt` and `IssuerPayload` are written from the issuer response by
+`IssuerSyncService`; `IssuerPayload` is the exact JSON object for that
+transaction. A row written by an older release may not have them, so the store
+reads `PostedAt` as `OccurredAt` and `IssuerPayload` as `{}` when absent.
 
 Known limits, accepted because the feed only ever does one thing: no
 cross-partition queries, no server-side aggregation, and 1 MB per entity. The
@@ -471,13 +477,20 @@ rounds to zero here.
    kept in step with `DEMO_USERNAME` / `DEMO_PASSWORD` / `DEMO_PHONE` and
    `ORG_ID` instead of being left stale.
 2. `api` seeds three cards and their artwork (uploaded to `card-art`) if empty.
-3. `api` also seeds the deterministic transaction fixtures into Table Storage,
-   keyed so a re-run upserts rather than duplicates. Pulling the feed from the
-   issuer is a later slice (`IssuerSyncService`), which will replace the seed
-   without changing the read path.
-4. The UI therefore reads a warm, local feed and never waits on the issuer.
+   `SEED_ENABLED=false` skips this step.
+3. `IssuerSyncService` pulls each card's transactions from `issuer-mock` at
+   start-up and every `ISSUER_SYNC_INTERVAL` (default 5 minutes), validates the
+   payload, and upserts it into Table Storage by row key. No transactions are
+   seeded by the API itself.
+4. A failed pull is recorded as `failed` in `app.issuer_sync` with a bounded,
+   redacted message, and the next card is attempted. The API stays healthy and
+   keeps serving the last good local feed; an issuer outage never turns a
+   transaction request into a 500.
+5. The issuer fixture is deterministic, so a reset always produces the same
+   three cards and 40 transactions, with identical IDs, timestamps, amounts,
+   directions, merchants, and statuses.
 
-The fixtures are deterministic, so a reset always produces the same demo.
+The UI therefore reads a warm, local feed and never waits on the issuer.
 
 ### 8.8 Schema evolution
 
@@ -611,6 +624,49 @@ swapped for Flyway or Liquibase without touching the application. What must be
 kept is the boundary: the app never applies schema changes, and every change has
 a reviewed script with a recorded version.
 
+### 8.10 Issuer API contract
+
+`issuer-mock` is a stand-in for the card issuer. The API talks to it only
+through `IIssuerClient`; swapping in a real issuer means replacing the adapter,
+not the sync logic or the read path.
+
+| Method | Path | Auth | Response |
+|--------|------|------|----------|
+| GET | `/healthz` | none | `{ "status": "ok" }` |
+| GET | `/issuer/v1/cards/{card_id}/transactions` | `X-Api-Key: <ISSUER_API_KEY>` | `{ "card_id", "transactions": [...] }` |
+
+Each transaction object is:
+
+```json
+{
+  "transaction_id": "00000000-0000-4000-8000-000000000001",
+  "amount_minor": 450,
+  "currency": "AUD",
+  "direction": "debit",
+  "merchant": "Dan Murphy's",
+  "status": "posted",
+  "occurred_at": "2026-10-31T21:00:00Z",
+  "posted_at": "2026-10-31T23:00:00Z"
+}
+```
+
+Transactions are returned newest first. Errors use
+`{ "error": { "code", "message" } }`: a missing or wrong API key is `401`
+`UNAUTHORIZED`, and an unknown card is `404` `CARD_NOT_FOUND`.
+
+In the fixture, `posted_at` is always `occurred_at + 2 hours`, including pending
+transactions; that rule is part of the fixture contract.
+
+The payload is untrusted. `IssuerSyncService` rejects the whole card when
+`card_id` does not match the request, `transaction_id` is empty, `currency` is
+not three characters, `direction` is not `debit`/`credit`, `status` is not
+`posted`/`pending`, `amount_minor` is not positive, the merchant is empty, a
+timestamp is missing, or the card returns more than 500 transactions. Nothing
+from that card is written until every record has passed.
+
+The fixture lives in `tools/IssuerMock/fixtures/transactions.json` and is part of
+the demo contract (see §13.4).
+
 ## 9. Front-end
 
 ### 9.1 Stack
@@ -677,7 +733,11 @@ English only, `en-AU` formatting: `A$` currency symbol, `DD MMM YYYY` dates.
 | `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
 Startup ordering: `mssql` healthy → `db-migrator` completes → `auth` → `api`;
-`api` also waits for `azurite`, `issuer-mock`, and `sms-mock`.
+`api` also waits for `azurite` and for `issuer-mock` to start. The issuer
+dependency is deliberately not a health gate: the sync worker records a failure
+and the API serves its local feed, so a broken issuer cannot stop the API from
+starting. `issuer-mock` is reachable only on the Compose network for `api`; the
+local `8084` mapping exists for debugging and the documented curl examples.
 
 ### 10.2 Compose profiles
 
@@ -698,7 +758,9 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 | `JWT_ISSUER` / `JWT_AUDIENCE` / `JWT_TTL` | auth, api | `http://auth:8081`, `sme-demo-api`, `30m` |
 | `AUTH_METADATA_URL` | api | `http://auth:8081/.well-known/openid-configuration` |
 | `SMS_PROVIDER_URL` | auth | `http://sms-mock:8083` |
-| `ISSUER_BASE_URL` / `ISSUER_API_KEY` | api | `http://issuer-mock:8084`, fake key |
+| `ISSUER_BASE_URL` / `ISSUER_API_KEY` | api | `http://issuer-mock:8084`, `demo-issuer-key` |
+| `ISSUER_SYNC_INTERVAL` | api | `5m` (short forms such as `10s` are accepted) |
+| `ISSUER_SYNC_ENABLED` | api | `true`; `false` does not register the sync worker |
 | `AZURE_STORAGE_CONNECTION_STRING` | api | `UseDevelopmentStorage=true` outside Docker; Compose sets explicit `BlobEndpoint`/`TableEndpoint` values |
 | `TRANSACTIONS_TABLE` / `CARD_ART_CONTAINER` | api | `transactions`, `card-art` |
 | `AUTH_REQUIRE_HTTPS_METADATA` | api | `true`; Compose sets `false` because auth is plain HTTP on its internal port |
@@ -716,11 +778,11 @@ is baked into an image.
 - `docker compose up --build` builds and starts everything.
 - `db-migrator` applies the idempotent schema scripts, then exits; `auth` and
   `api` start only after it succeeds.
-- Seed data is applied idempotently at start-up (one user, three cards, about
-  40 transactions seeded locally; pulling them from the mock issuer is a later
-  slice).
+- Seed data is applied idempotently at start-up (one user, three cards and their
+  artwork); the API then pulls about 40 transactions from `issuer-mock` and
+  upserts them into Table Storage.
 - `docker compose down -v && docker compose up` returns the demo to its initial
-  state.
+  state, including the same 40 transaction IDs from the deterministic fixture.
 
 ### 10.5 Offline behaviour
 
@@ -801,10 +863,13 @@ The demo is done when all of these hold on a clean machine:
    endpoint plus the API `/me` response, not from the token.
 9. Signing out clears the session and returns to `/login`.
 10. With the network disconnected after build, the demo still passes steps 2–9.
-11. Stopping `issuer-mock` leaves the wallet usable and logs a handled upstream
-    failure; it does not return 500 to the browser.
+11. Stopping `issuer-mock` leaves the API healthy and the wallet usable: the
+    sync run logs a handled warning, `app.issuer_sync` changes to `failed` with a
+    bounded redacted message, and transaction requests still return 200 from the
+    existing local feed (no 500).
 12. `docker compose down -v && docker compose up` restores the identical demo,
-    including the same seeded transactions.
+    including the same 40 transaction IDs, timestamps, amounts, directions,
+    merchants, and statuses from the issuer fixture.
 13. From empty volumes, migrations apply exactly once; a second
     `docker compose up` reports nothing pending.
 14. `dotnet ef migrations has-pending-model-changes` passes on a clean checkout.

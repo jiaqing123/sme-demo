@@ -3,6 +3,8 @@ namespace SmeDemo.Application.Abstractions;
 /// <summary>
 /// One transaction as the feed stores and returns it. <see cref="RowKey"/> is the
 /// storage cursor; it is wrapped as an opaque token before it reaches a client.
+/// <see cref="PostedAt"/> and <see cref="IssuerPayload"/> come from the issuer
+/// and are persisted as supplied; older rows may not have them.
 /// </summary>
 public sealed record TransactionRecord(
     string RowKey,
@@ -13,7 +15,9 @@ public sealed record TransactionRecord(
     string Direction,
     string Merchant,
     string Status,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    DateTimeOffset PostedAt,
+    string IssuerPayload);
 
 public sealed record TransactionPage(IReadOnlyList<TransactionRecord> Items, string? NextRowKey);
 

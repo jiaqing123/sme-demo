@@ -20,14 +20,17 @@ src/SmeDemo.Application            MediatR handlers, DTOs, validators, port inte
 src/SmeDemo.Domain                 entities and invariants
 src/SmeDemo.Infrastructure         EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                   independent JWT issuer (own database and keys)
+tools/IssuerMock                   stand-in card issuer serving the deterministic fixture
 tools/Migrator                     one-shot schema applier (runs in its own container)
 db/migrations/api/*.sql            generated, committed, idempotent API schema scripts
 db/migrations/auth/*.sql           generated, committed, idempotent auth schema scripts
 db/bootstrap/app-logins.sql        creates the read/write-only application logins
+tests/IssuerMock.Tests             fixture contract, auth and ordering tests
 tests/SmeDemo.Application.Tests    handler and validator unit tests
 tests/SmeDemo.Api.Tests            integration tests through WebApplicationFactory
 tests/SmeDemo.Auth.Tests           challenge-rule and token-claim tests
-compose.yaml                       SQL Server, migrators, grants, Azurite, auth, API
+tests/SmeDemo.Infrastructure.Tests IssuerSyncService tests against fake ports/InMemory EF
+compose.yaml                       SQL Server, migrators, grants, Azurite, issuer-mock, auth, API
 docs/                              requirements, licensing, workshop
 ```
 
@@ -153,13 +156,19 @@ Expected shapes: `/me` returns `{ id, org, name }`; cards are ordered by
 `display_order`; transactions are newest first and `next_cursor` is `null` on the
 last page. Errors use the ProblemDetails envelope from `requirements.md` §7.2.
 
-### Storage and seeding
+### Storage, seeding, and sync
 
 `azurite` provides Table Storage (transactions) and Blob Storage (`card-art`) on
-the internal network only. The API seeds three cards, their SVG artwork, and
-about 40 transactions at start-up; every write is an idempotent upsert, so a
-restart or a second run does not duplicate data. Set `SEED_ENABLED=false` to skip
-seeding (the API tests do).
+the internal network only. The API seeds three cards and their SVG artwork at
+start-up; every write is an idempotent upsert, so a restart or a second run does
+not duplicate data. Set `SEED_ENABLED=false` to skip card seeding (the API tests
+do).
+
+Transactions are not seeded. `IssuerSyncService` pulls them from `issuer-mock` at
+start-up and then every `ISSUER_SYNC_INTERVAL` (default `5m`; `10s` is useful for
+testing). It validates the whole card before writing, upserts by row key, and
+records the result in `app.issuer_sync`, one row per card. `ISSUER_SYNC_ENABLED=false`
+does not register the worker at all.
 
 Inside Compose the connection string must name the endpoints explicitly:
 
@@ -169,6 +178,41 @@ DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;...;BlobEndpoint=http
 
 `UseDevelopmentStorage=true` is only for running the API on the host against a
 local Azurite.
+
+### Mock issuer
+
+`issuer-mock` is a separate ASP.NET Core service on port 8084. It serves the
+embedded fixture in `tools/IssuerMock/fixtures/transactions.json`; the fixture is
+the demo contract, so changing it changes the wallet and the acceptance
+screenshots (requirements §13.4).
+
+```powershell
+# Liveness.
+Invoke-RestMethod http://localhost:8084/healthz
+
+$cardId = 'c1000000-0000-4000-8000-000000000001'
+$key = 'demo-issuer-key'
+Invoke-RestMethod "http://localhost:8084/issuer/v1/cards/$cardId/transactions" `
+  -Headers @{ 'X-Api-Key' = $key } | ConvertTo-Json -Depth 5
+```
+
+A missing or wrong `X-Api-Key` returns 401 `UNAUTHORIZED`; an unknown card
+returns 404 `CARD_NOT_FOUND`. `ISSUER_BASE_URL` and `ISSUER_API_KEY` on `api`
+must agree with the service.
+
+Check sync state and recent log lines:
+
+```powershell
+docker exec sme-demo-mssql-1 /opt/mssql-tools18/bin/sqlcmd `
+  -S localhost -U sa -P "Local_Dev_Only_123!" -C -d sme_api `
+  -Q "SELECT CardId, LastStatus, LastSyncedAt, LastError FROM app.issuer_sync ORDER BY CardId"
+
+docker compose logs api | Select-String 'Issuer sync'
+```
+
+On a fresh volume, expect three `ok` rows and 14/13/13 transactions for the three
+cards. While the issuer is down, expect `failed` rows, a handled warning in the
+API log, and unchanged transaction responses.
 
 ### Database logins (acceptance 15)
 
@@ -202,7 +246,7 @@ log shows a metadata/connection error.
 ```powershell
 dotnet tool restore                       # after cloning; installs dotnet-ef
 dotnet build SmeDemo.slnx
-dotnet test SmeDemo.slnx                  # migrator, auth, application, and API tests
+dotnet test SmeDemo.slnx                  # migrator, auth, application, infrastructure, issuer-mock, API tests
 ```
 
 ## Changing a schema
@@ -296,10 +340,14 @@ reset. Do not use it on a database you care about.
 | Auth cannot write `/keys` | key volume not writable by the app user | `docker compose down -v` to recreate the volume |
 | `api` unhealthy or restarts | Azurite/Table/Blob not ready, or SQL login lacks rights | check `docker compose logs api`: the seeder retries 20 times, then stops the host; check `docker compose ps azurite` and `db-grants` |
 | Every API call returns 401 | metadata fetch from `auth` failed, or `AUTH_METADATA_URL`/issuer/audience mismatched | check `docker compose logs api`; confirm `AUTH_REQUIRE_HTTPS_METADATA=false` in Compose and that auth is healthy |
+| `issuer_sync` rows are `failed` | issuer-mock stopped, wrong `ISSUER_API_KEY`, or issuer returned an invalid payload | check `docker compose ps issuer-mock` and `docker compose logs api`; curl the issuer endpoint with the configured key; the API keeps serving the local feed meanwhile |
+| Wallet has cards but no transactions after a fresh start | the first sync has not run yet, or it failed | wait for `ISSUER_SYNC_INTERVAL`, check `app.issuer_sync`, and re-run with a short `ISSUER_SYNC_INTERVAL=10s` if needed |
+| Issuer returns 401 | `ISSUER_API_KEY` differs between `api` and `issuer-mock` | set one value for both in `.env` and recreate both containers |
 
 ## What is not here yet
 
-The web UI, the issuer/SMS mocks, and the issuer sync service from
-`requirements.md` are not implemented. The auth issuer and the resource API are
-implemented with their own databases, migrations, idempotent scripts, and tests;
-transactions are seeded locally rather than pulled from an issuer.
+The web UI and the SMS mock are not implemented. The auth issuer, the resource
+API, and the mock issuer are implemented with their own databases, migrations,
+idempotent scripts, and tests. The API pulls transactions from `issuer-mock` via
+`IssuerSyncService`; issuer failures degrade to the last good local feed rather
+than failing requests.

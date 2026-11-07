@@ -15,7 +15,11 @@ public sealed record InfrastructureOptions(
     string StorageConnectionString,
     string TransactionsTable,
     string CardArtContainer,
-    string OrgId)
+    string OrgId,
+    string IssuerBaseUrl,
+    string IssuerApiKey,
+    TimeSpan IssuerSyncInterval,
+    bool IssuerSyncEnabled)
 {
     public void Validate()
     {
@@ -24,5 +28,28 @@ public sealed record InfrastructureOptions(
         ArgumentException.ThrowIfNullOrWhiteSpace(TransactionsTable);
         ArgumentException.ThrowIfNullOrWhiteSpace(CardArtContainer);
         ArgumentException.ThrowIfNullOrWhiteSpace(OrgId);
+
+        if (IssuerSyncInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(IssuerSyncInterval),
+                "The issuer sync interval must be positive.");
+        }
+
+        if (!IssuerSyncEnabled)
+        {
+            return;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(IssuerBaseUrl);
+        ArgumentException.ThrowIfNullOrWhiteSpace(IssuerApiKey);
+
+        if (!Uri.TryCreate(IssuerBaseUrl, UriKind.Absolute, out var issuerUri) ||
+            (issuerUri.Scheme != Uri.UriSchemeHttp && issuerUri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new ArgumentException(
+                "IssuerBaseUrl must be an absolute http(s) URL.",
+                nameof(IssuerBaseUrl));
+        }
     }
 }

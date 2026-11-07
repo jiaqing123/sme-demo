@@ -6,6 +6,7 @@ using SmeDemo.Api.Endpoints;
 using SmeDemo.Api.Errors;
 using SmeDemo.Application;
 using SmeDemo.Infrastructure;
+using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -18,7 +19,11 @@ builder.Services.AddInfrastructure(new InfrastructureOptions(
     options.StorageConnectionString,
     options.TransactionsTable,
     options.CardArtContainer,
-    options.OrgId));
+    options.OrgId,
+    options.IssuerBaseUrl,
+    options.IssuerApiKey,
+    options.IssuerSyncInterval,
+    options.IssuerSyncEnabled));
 
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
@@ -43,6 +48,14 @@ builder.Services.AddOpenApi();
 if (options.SeedEnabled)
 {
     builder.Services.AddHostedService<ApiDataSeeder>();
+}
+
+// Registered after the seeder so the first sync sees the seeded cards. The
+// sync service is a background worker: its startup failures are logged and
+// recorded, never fatal to the API host.
+if (options.IssuerSyncEnabled)
+{
+    builder.Services.AddHostedService<IssuerSyncService>();
 }
 
 var app = builder.Build();

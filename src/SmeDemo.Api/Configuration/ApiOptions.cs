@@ -1,3 +1,5 @@
+using SmeDemo.Infrastructure.Configuration;
+
 namespace SmeDemo.Api.Configuration;
 
 /// <summary>
@@ -16,7 +18,11 @@ public sealed record ApiOptions(
     bool SeedEnabled,
     string StorageConnectionString,
     string TransactionsTable,
-    string CardArtContainer)
+    string CardArtContainer,
+    string IssuerBaseUrl,
+    string IssuerApiKey,
+    TimeSpan IssuerSyncInterval,
+    bool IssuerSyncEnabled)
 {
     public static ApiOptions FromConfiguration(IConfiguration configuration)
     {
@@ -28,6 +34,8 @@ public sealed record ApiOptions(
             "AUTH_METADATA_URL",
             "http://auth:8081/.well-known/openid-configuration");
         var publicBaseUrl = Read(configuration, "PUBLIC_BASE_URL", "http://localhost:8082").TrimEnd('/');
+        var issuerBaseUrl = Read(configuration, "ISSUER_BASE_URL", "http://issuer-mock:8084").TrimEnd('/');
+        var issuerSyncEnabled = ReadBool(configuration, "ISSUER_SYNC_ENABLED", fallback: true);
 
         if (!IsAbsoluteHttpUrl(jwtIssuer))
         {
@@ -42,6 +50,11 @@ public sealed record ApiOptions(
         if (!IsAbsoluteHttpUrl(publicBaseUrl))
         {
             throw new InvalidOperationException("PUBLIC_BASE_URL must be an absolute http(s) URL.");
+        }
+
+        if (issuerSyncEnabled && !IsAbsoluteHttpUrl(issuerBaseUrl))
+        {
+            throw new InvalidOperationException("ISSUER_BASE_URL must be an absolute http(s) URL.");
         }
 
         return new ApiOptions(
@@ -61,7 +74,13 @@ public sealed record ApiOptions(
                 "AZURE_STORAGE_CONNECTION_STRING",
                 "UseDevelopmentStorage=true"),
             TransactionsTable: Read(configuration, "TRANSACTIONS_TABLE", "transactions"),
-            CardArtContainer: Read(configuration, "CARD_ART_CONTAINER", "card-art"));
+            CardArtContainer: Read(configuration, "CARD_ART_CONTAINER", "card-art"),
+            IssuerBaseUrl: issuerBaseUrl,
+            IssuerApiKey: Read(configuration, "ISSUER_API_KEY", "demo-issuer-key"),
+            IssuerSyncInterval: issuerSyncEnabled
+                ? ReadDuration(configuration, "ISSUER_SYNC_INTERVAL", "5m")
+                : TimeSpan.FromMinutes(5),
+            IssuerSyncEnabled: issuerSyncEnabled);
     }
 
     private static bool IsAbsoluteHttpUrl(string value) =>
@@ -91,5 +110,19 @@ public sealed record ApiOptions(
         return bool.TryParse(value, out var parsed)
             ? parsed
             : throw new InvalidOperationException($"{name} must be 'true' or 'false'.");
+    }
+
+    private static TimeSpan ReadDuration(IConfiguration configuration, string name, string fallback)
+    {
+        var value = Read(configuration, name, fallback);
+
+        try
+        {
+            return DurationParser.Parse(value);
+        }
+        catch (FormatException exception)
+        {
+            throw new InvalidOperationException($"{name} is invalid: {exception.Message}", exception);
+        }
     }
 }

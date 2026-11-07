@@ -9,10 +9,11 @@ using SmeDemo.Infrastructure.Persistence;
 namespace SmeDemo.Infrastructure.Seeding;
 
 /// <summary>
-/// Seeds cards, transactions, and card artwork at start-up. Every write is an
-/// idempotent upsert, and transient storage/database startup is retried a bounded
-/// number of times; a persistent failure stops the host instead of being
-/// swallowed (requirements §8.7).
+/// Seeds cards and card artwork at start-up. Every write is an idempotent
+/// upsert, and transient storage/database startup is retried a bounded number
+/// of times; a persistent failure stops the host instead of being swallowed
+/// (requirements §8.7). Transactions are pulled by <c>IssuerSyncService</c>,
+/// not seeded here.
 /// </summary>
 public sealed class ApiDataSeeder : IHostedService
 {
@@ -63,7 +64,6 @@ public sealed class ApiDataSeeder : IHostedService
     {
         await using var scope = _scopeFactory.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var transactions = scope.ServiceProvider.GetRequiredService<ITransactionStore>();
         var blobs = scope.ServiceProvider.GetRequiredService<IBlobStore>();
 
         // Probe the database first: it is a separate container that may still be
@@ -86,8 +86,6 @@ public sealed class ApiDataSeeder : IHostedService
             await using var artwork = OpenArtwork(seed.ArtBlobName);
             await blobs.UploadAsync(seed.ArtBlobName, artwork, "image/svg+xml", cancellationToken);
         }
-
-        await transactions.UpsertAsync(DemoSeedData.CreateTransactions(), cancellationToken);
     }
 
     private static Stream OpenArtwork(string fileName)

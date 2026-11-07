@@ -33,6 +33,30 @@ public sealed class IssuerSync
         CardId = cardId,
         LastSyncedAt = syncedAtUtc,
         LastStatus = IssuerSyncStatus.Failed,
-        LastError = error.Length > 512 ? error[..512] : error,
+        LastError = Truncate(error),
     };
+
+    /// <summary>
+    /// Records a successful pull on an existing row. Keeping this on the entity
+    /// means the sync service does not have to know the storage rules.
+    /// </summary>
+    public void MarkSucceeded(DateTime syncedAtUtc)
+    {
+        LastSyncedAt = syncedAtUtc;
+        LastStatus = IssuerSyncStatus.Ok;
+        LastError = null;
+    }
+
+    /// <summary>
+    /// Records a failed pull. The message is redacted and bounded before it is
+    /// stored, so an integration error cannot leak a secret or bloat the row.
+    /// </summary>
+    public void MarkFailed(DateTime syncedAtUtc, string error)
+    {
+        LastSyncedAt = syncedAtUtc;
+        LastStatus = IssuerSyncStatus.Failed;
+        LastError = Truncate(error);
+    }
+
+    private static string Truncate(string error) => error.Length > 512 ? error[..512] : error;
 }

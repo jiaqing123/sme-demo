@@ -157,6 +157,29 @@ services:
     networks:
       - sme
 
+  # Stand-in card issuer. The API pulls transactions from here instead of
+  # seeding them; the fixture is the demo contract (requirements §13.4).
+  issuer-mock:
+    build:
+      context: .
+      dockerfile: tools/IssuerMock/Dockerfile
+    image: sme-demo-issuer-mock:local
+    environment:
+      ASPNETCORE_URLS: "http://+:8084"
+      ISSUER_API_KEY: "${ISSUER_API_KEY:-demo-issuer-key}"
+    ports:
+      - "8084:8084"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -fsS http://localhost:8084/healthz || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks:
+      - sme
+
   api:
     build:
       context: .
@@ -180,6 +203,10 @@ services:
       CARD_ART_CONTAINER: "card-art"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8082}"
       SEED_ENABLED: "${SEED_ENABLED:-true}"
+      ISSUER_BASE_URL: "${ISSUER_BASE_URL:-http://issuer-mock:8084}"
+      ISSUER_API_KEY: "${ISSUER_API_KEY:-demo-issuer-key}"
+      ISSUER_SYNC_INTERVAL: "${ISSUER_SYNC_INTERVAL:-5m}"
+      ISSUER_SYNC_ENABLED: "${ISSUER_SYNC_ENABLED:-true}"
     ports:
       - "8082:8082"
     depends_on:
@@ -195,6 +222,11 @@ services:
         condition: service_healthy
       azurite:
         condition: service_healthy
+      issuer-mock:
+        # Deliberately not service_healthy: the sync worker tolerates an issuer
+        # that is down or unhealthy, and the API must still start and serve its
+        # local feed in that case (acceptance 11).
+        condition: service_started
     healthcheck:
       test:
         - "CMD-SHELL"

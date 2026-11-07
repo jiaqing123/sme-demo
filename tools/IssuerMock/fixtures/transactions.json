@@ -1,0 +1,419 @@
+{
+  "cards": [
+    {
+      "card_id": "c1000000-0000-4000-8000-000000000001",
+      "transactions": [
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000001",
+          "amount_minor": 450,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Dan Murphy's",
+          "status": "posted",
+          "occurred_at": "2026-10-31T21:00:00Z",
+          "posted_at": "2026-10-31T23:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000002",
+          "amount_minor": 1481,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Woolworths",
+          "status": "posted",
+          "occurred_at": "2026-10-31T18:00:00Z",
+          "posted_at": "2026-10-31T20:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000003",
+          "amount_minor": 2512,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Coles",
+          "status": "posted",
+          "occurred_at": "2026-10-31T15:00:00Z",
+          "posted_at": "2026-10-31T17:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000004",
+          "amount_minor": 3543,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "JB Hi-Fi",
+          "status": "posted",
+          "occurred_at": "2026-10-31T12:00:00Z",
+          "posted_at": "2026-10-31T14:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000005",
+          "amount_minor": 4574,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Bunnings",
+          "status": "posted",
+          "occurred_at": "2026-10-31T09:00:00Z",
+          "posted_at": "2026-10-31T11:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000006",
+          "amount_minor": 5605,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Uber",
+          "status": "posted",
+          "occurred_at": "2026-10-31T06:00:00Z",
+          "posted_at": "2026-10-31T08:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000007",
+          "amount_minor": 13250,
+          "currency": "AUD",
+          "direction": "credit",
+          "merchant": "Qantas",
+          "status": "posted",
+          "occurred_at": "2026-10-31T03:00:00Z",
+          "posted_at": "2026-10-31T05:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000008",
+          "amount_minor": 7667,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Officeworks",
+          "status": "posted",
+          "occurred_at": "2026-10-31T00:00:00Z",
+          "posted_at": "2026-10-31T02:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000009",
+          "amount_minor": 8698,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Bp",
+          "status": "pending",
+          "occurred_at": "2026-10-30T21:00:00Z",
+          "posted_at": "2026-10-30T23:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000010",
+          "amount_minor": 9729,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Netflix",
+          "status": "posted",
+          "occurred_at": "2026-10-30T18:00:00Z",
+          "posted_at": "2026-10-30T20:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000011",
+          "amount_minor": 10760,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Dan Murphy's",
+          "status": "posted",
+          "occurred_at": "2026-10-30T15:00:00Z",
+          "posted_at": "2026-10-30T17:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000012",
+          "amount_minor": 11791,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Woolworths",
+          "status": "posted",
+          "occurred_at": "2026-10-30T12:00:00Z",
+          "posted_at": "2026-10-30T14:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000013",
+          "amount_minor": 12822,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Coles",
+          "status": "posted",
+          "occurred_at": "2026-10-30T09:00:00Z",
+          "posted_at": "2026-10-30T11:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000014",
+          "amount_minor": 22875,
+          "currency": "AUD",
+          "direction": "credit",
+          "merchant": "JB Hi-Fi",
+          "status": "posted",
+          "occurred_at": "2026-10-30T06:00:00Z",
+          "posted_at": "2026-10-30T08:00:00Z"
+        }
+      ]
+    },
+    {
+      "card_id": "c1000000-0000-4000-8000-000000000002",
+      "transactions": [
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000015",
+          "amount_minor": 450,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Dan Murphy's",
+          "status": "posted",
+          "occurred_at": "2026-10-31T22:00:00Z",
+          "posted_at": "2026-11-01T00:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000016",
+          "amount_minor": 1481,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Woolworths",
+          "status": "posted",
+          "occurred_at": "2026-10-31T17:00:00Z",
+          "posted_at": "2026-10-31T19:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000017",
+          "amount_minor": 2512,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Coles",
+          "status": "posted",
+          "occurred_at": "2026-10-31T12:00:00Z",
+          "posted_at": "2026-10-31T14:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000018",
+          "amount_minor": 3543,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "JB Hi-Fi",
+          "status": "posted",
+          "occurred_at": "2026-10-31T07:00:00Z",
+          "posted_at": "2026-10-31T09:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000019",
+          "amount_minor": 4574,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Bunnings",
+          "status": "posted",
+          "occurred_at": "2026-10-31T02:00:00Z",
+          "posted_at": "2026-10-31T04:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000020",
+          "amount_minor": 5605,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Uber",
+          "status": "posted",
+          "occurred_at": "2026-10-30T21:00:00Z",
+          "posted_at": "2026-10-30T23:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000021",
+          "amount_minor": 13250,
+          "currency": "AUD",
+          "direction": "credit",
+          "merchant": "Qantas",
+          "status": "posted",
+          "occurred_at": "2026-10-30T16:00:00Z",
+          "posted_at": "2026-10-30T18:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000022",
+          "amount_minor": 7667,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Officeworks",
+          "status": "posted",
+          "occurred_at": "2026-10-30T11:00:00Z",
+          "posted_at": "2026-10-30T13:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000023",
+          "amount_minor": 8698,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Bp",
+          "status": "pending",
+          "occurred_at": "2026-10-30T06:00:00Z",
+          "posted_at": "2026-10-30T08:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000024",
+          "amount_minor": 9729,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Netflix",
+          "status": "posted",
+          "occurred_at": "2026-10-30T01:00:00Z",
+          "posted_at": "2026-10-30T03:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000025",
+          "amount_minor": 10760,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Dan Murphy's",
+          "status": "posted",
+          "occurred_at": "2026-10-29T20:00:00Z",
+          "posted_at": "2026-10-29T22:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000026",
+          "amount_minor": 11791,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Woolworths",
+          "status": "posted",
+          "occurred_at": "2026-10-29T15:00:00Z",
+          "posted_at": "2026-10-29T17:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000027",
+          "amount_minor": 12822,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Coles",
+          "status": "posted",
+          "occurred_at": "2026-10-29T10:00:00Z",
+          "posted_at": "2026-10-29T12:00:00Z"
+        }
+      ]
+    },
+    {
+      "card_id": "c1000000-0000-4000-8000-000000000003",
+      "transactions": [
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000028",
+          "amount_minor": 450,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Dan Murphy's",
+          "status": "posted",
+          "occurred_at": "2026-10-31T23:00:00Z",
+          "posted_at": "2026-11-01T01:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000029",
+          "amount_minor": 1481,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Woolworths",
+          "status": "posted",
+          "occurred_at": "2026-10-31T19:00:00Z",
+          "posted_at": "2026-10-31T21:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000030",
+          "amount_minor": 2512,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Coles",
+          "status": "posted",
+          "occurred_at": "2026-10-31T15:00:00Z",
+          "posted_at": "2026-10-31T17:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000031",
+          "amount_minor": 3543,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "JB Hi-Fi",
+          "status": "posted",
+          "occurred_at": "2026-10-31T11:00:00Z",
+          "posted_at": "2026-10-31T13:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000032",
+          "amount_minor": 4574,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Bunnings",
+          "status": "posted",
+          "occurred_at": "2026-10-31T07:00:00Z",
+          "posted_at": "2026-10-31T09:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000033",
+          "amount_minor": 5605,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Uber",
+          "status": "posted",
+          "occurred_at": "2026-10-31T03:00:00Z",
+          "posted_at": "2026-10-31T05:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000034",
+          "amount_minor": 13250,
+          "currency": "AUD",
+          "direction": "credit",
+          "merchant": "Qantas",
+          "status": "posted",
+          "occurred_at": "2026-10-30T23:00:00Z",
+          "posted_at": "2026-10-31T01:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000035",
+          "amount_minor": 7667,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Officeworks",
+          "status": "posted",
+          "occurred_at": "2026-10-30T19:00:00Z",
+          "posted_at": "2026-10-30T21:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000036",
+          "amount_minor": 8698,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Bp",
+          "status": "pending",
+          "occurred_at": "2026-10-30T15:00:00Z",
+          "posted_at": "2026-10-30T17:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000037",
+          "amount_minor": 9729,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Netflix",
+          "status": "posted",
+          "occurred_at": "2026-10-30T11:00:00Z",
+          "posted_at": "2026-10-30T13:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000038",
+          "amount_minor": 10760,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Dan Murphy's",
+          "status": "posted",
+          "occurred_at": "2026-10-30T07:00:00Z",
+          "posted_at": "2026-10-30T09:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000039",
+          "amount_minor": 11791,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Woolworths",
+          "status": "posted",
+          "occurred_at": "2026-10-30T03:00:00Z",
+          "posted_at": "2026-10-30T05:00:00Z"
+        },
+        {
+          "transaction_id": "00000000-0000-4000-8000-000000000040",
+          "amount_minor": 12822,
+          "currency": "AUD",
+          "direction": "debit",
+          "merchant": "Coles",
+          "status": "posted",
+          "occurred_at": "2026-10-29T23:00:00Z",
+          "posted_at": "2026-10-30T01:00:00Z"
+        }
+      ]
+    }
+  ]
+}

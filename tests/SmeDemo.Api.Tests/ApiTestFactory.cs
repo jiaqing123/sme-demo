@@ -53,6 +53,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("ORG_ID", OrgId);
         Environment.SetEnvironmentVariable("PUBLIC_BASE_URL", "http://localhost:8082");
         Environment.SetEnvironmentVariable("CORS_ORIGIN", "http://localhost:8080");
+        Environment.SetEnvironmentVariable("ISSUER_SYNC_ENABLED", "false");
     }
 
     public ApiTestFactory()
@@ -108,6 +109,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 ["ORG_ID"] = OrgId,
                 ["PUBLIC_BASE_URL"] = "http://localhost:8082",
                 ["CORS_ORIGIN"] = "http://localhost:8080",
+                ["ISSUER_SYNC_ENABLED"] = "false",
             });
         });
 
@@ -213,7 +215,9 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             "debit",
             "Woolworths",
             "posted",
-            occurredAt);
+            occurredAt,
+            occurredAt.AddHours(2),
+            "{}");
     }
 }
 

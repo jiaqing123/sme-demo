@@ -29,11 +29,16 @@ The auth issuer and the resource API are implemented. What exists today:
   JWT issuance, OIDC discovery, JWKS, `/auth/userinfo`, health check, and a
   persisted signing key.
 - `SmeDemo.Api` on port 8082: profile, cards, paginated transactions, card
-  artwork, and seeded demo data in Azurite Table/Blob Storage.
+  artwork, and demo cards/artwork seeded into SQL Server and Azurite Blob
+  Storage.
+- `SmeDemo.IssuerMock` on port 8084: a deterministic 40-transaction fixture,
+  API-key auth, and the issuer health check. `IssuerSyncService` pulls the feed at
+  start-up and every `ISSUER_SYNC_INTERVAL`; a failed issuer call is recorded in
+  `app.issuer_sync` and never breaks the local read path.
 - Unit and integration tests for the challenge rules, token claims, handlers,
-  validators, and HTTP contract.
+  validators, HTTP contract, issuer fixture, and sync validation/failure paths.
 
-Not implemented yet: the web UI, the issuer/SMS mocks, and issuer sync.
+Not implemented yet: the web UI and the SMS mock.
 
 ## Quick start
 
@@ -43,9 +48,9 @@ docker compose up -d --build
 ```
 
 The demo login is `demo` / `Demo_Passw0rd!` with OTP `123456`. `auth` is on
-port 8081 and `api` on port 8082 (`/healthz`, `/api/v1/me`, `/api/v1/me/cards`).
-Details, the smoke tests, and the schema-change workflow are in
-[`docs/development.md`](docs/development.md).
+port 8081, `api` on port 8082 (`/healthz`, `/api/v1/me`, `/api/v1/me/cards`),
+and `issuer-mock` on port 8084. Details, the smoke tests, and the
+schema-change workflow are in [`docs/development.md`](docs/development.md).
 
 ## Repository layout
 
@@ -59,15 +64,18 @@ src/SmeDemo.Application             handlers, DTOs, validators, ports
 src/SmeDemo.Domain                  entities and invariants
 src/SmeDemo.Infrastructure          EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                    independent JWT issuer, own DbContext and migration
+tools/IssuerMock                    deterministic card-issuer stand-in
+tests/IssuerMock.Tests              issuer fixture/auth/ordering tests
 tests/Migrator.Tests                migrator script tests
 tests/SmeDemo.Application.Tests     handler and validator tests
 tests/SmeDemo.Api.Tests             HTTP contract tests through WebApplicationFactory
 tests/SmeDemo.Auth.Tests            challenge and token claim tests
+tests/SmeDemo.Infrastructure.Tests  issuer sync service tests
 tools/Migrator                      one-shot schema applier
 db/migrations/api/                  generated idempotent API SQL scripts
 db/migrations/auth/                 generated idempotent auth SQL scripts
 db/bootstrap/                       read/write-only application login script
-compose.yaml                        SQL Server, migrators, grants, Azurite, auth, API
+compose.yaml                        SQL Server, migrators, grants, Azurite, issuer-mock, auth, API
 ```
 
 ## Audience
