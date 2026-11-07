@@ -5,6 +5,7 @@ import type { Card, CardListResponse } from "../api/types";
 import { CardFace } from "../components/CardFace";
 import { ErrorState } from "../components/ErrorState";
 import { CardSummarySkeleton } from "../components/Skeleton";
+import { TransactionList } from "../components/TransactionList";
 import { formatExpiry, formatMaskedNumber, formatStatus } from "../lib/format";
 
 type CardState =
@@ -102,12 +103,7 @@ export function CardPage() {
             </dl>
           </div>
 
-          <div className="rounded-xl border border-dashed border-slate-300 bg-white p-6">
-            <h2 className="font-semibold text-slate-900">Transactions</h2>
-            <p className="mt-1 text-sm text-slate-600">
-              Transactions will be added in the next step.
-            </p>
-          </div>
+          <TransactionList cardId={state.card.id} />
         </div>
       ) : null}
     </div>

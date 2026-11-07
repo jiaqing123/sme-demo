@@ -29,8 +29,9 @@ today:
 - `web/` on port 8080: a React + TypeScript + Vite SPA built to static assets and
   served by nginx. nginx also reverse-proxies `/auth` and `/api`, so the browser
   only needs one origin. Sign-in (password then OTP), the card wallet with
-  artwork fetched as blob URLs, the card summary page, and the profile page are
-  implemented; the transactions list is the next web slice.
+  artwork fetched as blob URLs, the card summary and its paginated,
+  date-grouped transactions (pending badges, `Load more`, wallet scroll
+  restoration), and the profile page are implemented.
 - `SmeDemo.Auth` on port 8081: password login, in-memory OTP challenges, RS256
   JWT issuance, OIDC discovery, JWKS, `/auth/userinfo`, health check, and a
   persisted signing key.

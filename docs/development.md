@@ -350,6 +350,23 @@ single fetch wrapper. An authenticated 401 clears the session and redirects to
 error. Card artwork is fetched with the bearer token and converted to a blob
 URL, because an `<img>` request cannot carry an `Authorization` header.
 
+### Card transactions
+
+The card detail screen loads
+`/api/v1/me/cards/{id}/transactions?limit=10` and appends pages with the opaque
+`next_cursor` (URL-encoded). Ten is deliberate: the seeded feed has 14, 13, and
+13 transactions per card, so every card has a second page and `Load more` can be
+demonstrated without changing the fixture. Rows keep the API's newest-first
+order and are grouped by local calendar date only for display. Appends are
+de-duplicated by transaction id; a failed append keeps the loaded rows and
+retries the same cursor. The empty state is exactly `No transactions yet.`, and
+a `Pending` badge appears only on pending rows.
+
+The wallet restores its scroll position after returning from a card: the offset
+is saved on scroll and immediately before a tile is followed, kept in
+`sessionStorage` under `sme.wallet.scroll`, restored once after the grid renders,
+and removed on sign-out or session expiry. It is never stored in `localStorage`.
+
 ## Everyday commands
 
 ```powershell
@@ -460,10 +477,11 @@ reset. Do not use it on a database you care about.
 
 ## What is not here yet
 
-The web UI is implemented for sign-in with OTP, the card wallet with artwork, the
-card summary page, and the profile page. The card transactions list (date
-grouping, `Load more`, pending badges) is the next web slice. CI is not set up
-yet; the build, test, and type-check commands in this guide run locally. The auth
+The web UI is implemented for sign-in with OTP, the card wallet with artwork,
+the card summary plus its paginated, date-grouped transaction list (pending
+badges, `Load more`, retry on append failures, wallet scroll restoration), and
+the profile page. CI is not set up yet; the build, test, and type-check commands
+in this guide run locally. The auth
 issuer, the resource API, and the mock issuer are implemented with their own
 databases, migrations, idempotent scripts, and tests. The mock SMS provider is a
 stateless stand-in with its own contract tests. The API pulls transactions from

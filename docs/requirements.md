@@ -724,15 +724,27 @@ disposable but not alien.
 
 ### 9.4 Transactions screen
 
-- Card summary at the top, then transactions newest first, grouped by date.
-- Each row: merchant, time, signed amount (`−A$12.40` / `+A$5.00`), and a
-  `Pending` badge when applicable.
-- "Load more" using `next_cursor`. Empty state: "No transactions yet."
+- Card summary at the top, then transactions newest first, grouped by date. The
+  order is exactly the API's order; grouping never re-sorts rows.
+- The list requests 10 rows per page (`limit=10`) and appends the next page with
+  `next_cursor`. The seeded feed holds 14, 13, and 13 transactions per card, so
+  every card has a second page and "Load more" is demonstrable. Appended rows are
+  de-duplicated by transaction `id`; when `next_cursor` is null the action is
+  removed.
+- Each row: merchant, time, signed amount (`-A$12.40` / `+A$5.00`), and a
+  `Pending` badge when applicable. Posted rows have no badge.
+- "Load more" failed: rows already on screen stay, a readable error appears at
+  the bottom, and retrying repeats the same cursor rather than resetting to the
+  first page. A failed first page shows an error with a retry action instead.
+- Empty state: "No transactions yet."
 
 ### 9.5 States
 
 Every screen handles: loading (skeleton, not a spinner-only blank), empty,
-request failure with retry, and expired session.
+request failure with retry, and expired session. On the card screen this means a
+skeleton for the card summary and another for the transaction rows, an empty
+transactions message, a first-page error with retry, a load-more error that keeps
+the loaded rows, and no page-level error for a 401 (the request layer redirects).
 
 ### 9.6 Session handling
 
@@ -763,6 +775,12 @@ Card expiry is the industry `MM/YY` form (`09/28`), not a full date.
   browser's local time zone, not UTC, so a late-evening transaction stays on the
   day the user saw it. Amounts use `Intl.NumberFormat` with `en-AU` (A$), dates
   `DD MMM YYYY`, and times `HH:mm`.
+- **Paged transactions.** The card screen asks for `limit=10` and follows
+  `next_cursor`; the list is never cached across visits, so re-entering a card
+  starts from the first page again. Appends are de-duplicated by id in the
+  client. The wallet's scroll offset is kept in `sessionStorage`
+  (`sme.wallet.scroll`) only, restored once after the grid renders, and cleared
+  on sign-out or session expiry; it is never written to `localStorage`.
 - **401 semantics.** A 401 on an authenticated request clears `sessionStorage`,
   revokes cached artwork, and redirects to `/login?reason=expired`. The login,
   verify, and resend calls use the wrapper with `auth: false`; there a 401 is a

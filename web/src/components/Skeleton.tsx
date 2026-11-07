@@ -31,6 +31,25 @@ export function ProfileSkeleton() {
   );
 }
 
+export function TransactionListSkeleton({ rows = 5 }: { rows?: number }) {
+  return (
+    <div role="status" aria-label="Loading transactions" className="space-y-3">
+      <div className="h-4 w-28 animate-pulse rounded bg-slate-300" />
+      <div className="divide-y divide-slate-200 overflow-hidden rounded-xl border border-slate-200 bg-white">
+        {Array.from({ length: rows }, (_, index) => (
+          <div key={index} className="flex items-center justify-between gap-4 p-4">
+            <div className="space-y-2">
+              <div className="h-4 w-36 animate-pulse rounded bg-slate-300" />
+              <div className="h-3 w-16 animate-pulse rounded bg-slate-200" />
+            </div>
+            <div className="h-4 w-20 animate-pulse rounded bg-slate-300" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function CardSummarySkeleton() {
   return (
     <div role="status" aria-label="Loading card" className="space-y-6">

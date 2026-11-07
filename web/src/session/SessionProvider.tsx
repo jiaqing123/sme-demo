@@ -10,6 +10,7 @@ import {
 import { useNavigate } from "react-router-dom";
 import { resetUnauthorizedNotification, setUnauthorizedHandler } from "../api/client";
 import { clearCardArtCache } from "../lib/art";
+import { clearWalletScroll } from "../lib/scroll";
 import {
   clearSession,
   loadSession,
@@ -36,6 +37,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const expire = useCallback(() => {
     clearSession();
     clearCardArtCache();
+    clearWalletScroll();
     setSession(null);
     setSessionExpired(true);
   }, []);
@@ -50,6 +52,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(() => {
     clearSession();
     clearCardArtCache();
+    clearWalletScroll();
     setSession(null);
     setSessionExpired(false);
     navigate("/login", { replace: true });
