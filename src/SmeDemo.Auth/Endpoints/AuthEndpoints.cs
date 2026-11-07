@@ -19,13 +19,14 @@ public static class AuthEndpoints
                 ["RS256"])));
 
         app.MapGet("/.well-known/jwks.json", (SigningKeyStore keys) =>
-            Results.Ok(new JwksResponse([keys.PublicJwk])));
+            Results.Ok(new JwksResponse(keys.PublicJwks)));
 
         var auth = app.MapGroup("/auth");
 
         auth.MapPost("/login", LoginAsync);
         auth.MapPost("/challenges/{challengeId}/verify", VerifyAsync);
         auth.MapPost("/challenges/{challengeId}/resend", ResendAsync);
+        auth.MapGet("/userinfo", UserInfoAsync);
 
         return app;
     }
@@ -55,6 +56,15 @@ public static class AuthEndpoints
         CancellationToken cancellationToken)
     {
         var result = await flow.ResendAsync(challengeId, cancellationToken);
+        return ToHttpResult(result);
+    }
+
+    private static async Task<IResult> UserInfoAsync(
+        HttpRequest request,
+        UserInfoService userInfo,
+        CancellationToken cancellationToken)
+    {
+        var result = await userInfo.GetAsync(request.Headers.Authorization.ToString(), cancellationToken);
         return ToHttpResult(result);
     }
 

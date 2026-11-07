@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="404" viewBox="0 0 640 404" role="img" aria-label="Visa card ending 4242">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1a1f71"/>
+      <stop offset="1" stop-color="#3b4cc0"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="404" rx="28" fill="url(#bg)"/>
+  <circle cx="540" cy="70" r="130" fill="#ffffff" opacity="0.08"/>
+  <text x="44" y="88" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" letter-spacing="2">SME DEMO</text>
+  <rect x="44" y="168" width="62" height="46" rx="8" fill="#e8c66a"/>
+  <text x="44" y="300" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="34" letter-spacing="5">•••• 4242</text>
+  <text x="44" y="348" fill="#c8d0ff" font-family="Arial, Helvetica, sans-serif" font-size="20">09/28</text>
+  <text x="548" y="348" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="30" font-style="italic" font-weight="700">VISA</text>
+</svg>

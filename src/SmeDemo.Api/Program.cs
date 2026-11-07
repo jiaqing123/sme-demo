@@ -1,0 +1,92 @@
+using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using SmeDemo.Api.Auth;
+using SmeDemo.Api.Configuration;
+using SmeDemo.Api.Endpoints;
+using SmeDemo.Api.Errors;
+using SmeDemo.Application;
+using SmeDemo.Infrastructure;
+using SmeDemo.Infrastructure.Seeding;
+
+var builder = WebApplication.CreateBuilder(args);
+var options = ApiOptions.FromConfiguration(builder.Configuration);
+
+builder.Services.AddSingleton(options);
+builder.Services.AddApplication(new ApplicationOptions(options.PublicBaseUrl));
+builder.Services.AddInfrastructure(new InfrastructureOptions(
+    options.DatabaseUrl,
+    options.StorageConnectionString,
+    options.TransactionsTable,
+    options.CardArtContainer,
+    options.OrgId));
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddProblemDetails();
+
+builder.Services.ConfigureHttpJsonOptions(json =>
+{
+    json.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower;
+});
+
+builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
+    .WithOrigins(options.CorsOrigin)
+    .AllowAnyHeader()
+    .AllowAnyMethod()));
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(bearer => JwtBearerSetup.Configure(bearer, options));
+builder.Services.AddAuthorization();
+
+builder.Services.AddOpenApi();
+
+if (options.SeedEnabled)
+{
+    builder.Services.AddHostedService<ApiDataSeeder>();
+}
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+
+// Minimal APIs and routing reject malformed JSON or an unknown route with an
+// empty body before the exception handler sees it. Give those responses the
+// same error envelope as a handler failure, matching the auth service.
+app.UseStatusCodePages(async statusCodeContext =>
+{
+    var response = statusCodeContext.HttpContext.Response;
+    var problem = response.StatusCode switch
+    {
+        StatusCodes.Status400BadRequest => ApiProblem.Validation(new Dictionary<string, string[]>
+        {
+            ["body"] = ["The request body could not be read."],
+        }),
+        StatusCodes.Status404NotFound => ApiProblem.NotFound("The requested resource was not found."),
+        _ => null,
+    };
+
+    if (problem is null)
+    {
+        return;
+    }
+
+    await response.WriteAsJsonAsync(
+        problem.ToProblemDetails(),
+        options: null,
+        contentType: "application/problem+json");
+});
+
+app.UseCors();
+app.UseAuthentication();
+app.UseMiddleware<OrgClaimMiddleware>();
+app.UseAuthorization();
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+}
+
+app.MapResourceEndpoints();
+app.Run();
+
+public partial class Program;

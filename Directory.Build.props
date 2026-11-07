@@ -15,4 +15,17 @@
     <AnalysisLevel>latest</AnalysisLevel>
   </PropertyGroup>
 
+  <!--
+    AutoMapper 14.0.0 is pinned for licensing reasons (docs/licensing.md §3).
+    GHSA-rvv3-g6hj-g44x affects every free AutoMapper release; the first fixed
+    version is 15.1.1, which is RPL-1.5. The only free, unaudited alternative
+    would be a fork, so the advisory is suppressed deliberately. The exposure is
+    narrow here: the API maps only trusted, shallow Card/Transaction projections;
+    it never maps caller-supplied object graphs. Every mapping also sets
+    MaxDepth(64), which is the advisory's recommended mitigation.
+  -->
+  <ItemGroup>
+    <NuGetAuditSuppress Include="https://github.com/advisories/GHSA-rvv3-g6hj-g44x" />
+  </ItemGroup>
+
 </Project>

@@ -56,6 +56,17 @@ store, rotate, and explain. Pinning the permissive versions gives us the same
 result with fewer moving parts. The trade-off is that we do not receive fixes
 published only in 13+/15+.
 
+**Known advisory on the pinned AutoMapper.** `CVE-2026-32933`
+(GHSA-rvv3-g6hj-g44x, CVSS 7.5) is a denial-of-service bug in AutoMapper's
+recursive mapper: a deeply nested object graph can overflow the stack. It is
+fixed in 15.1.1, which is RPL-1.5, so the pinned 14.0.0 remains affected. NuGet
+audit flags it on every build, and `Directory.Build.props` suppresses that one
+advisory with the reason written next to it. The exposure in this codebase is
+narrow: mappings are explicit and flat (`Card` → `CardDto`, `TransactionRecord`
+→ `TransactionDto`), input never reaches AutoMapper, and each mapping sets
+`MaxDepth(64)`, the advisory's recommended mitigation. This is accepted for the
+demo and must be revisited before the code is reused in a production system.
+
 **Our options, for the record:**
 
 | Option | Cost | Effort | When it makes sense |

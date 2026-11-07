@@ -23,6 +23,7 @@ builder.Services.AddSingleton<JwtTokenIssuer>();
 builder.Services.AddSingleton<ChallengeStore>();
 builder.Services.AddSingleton<IPasswordHasher<AuthUser>, PasswordHasher<AuthUser>>();
 builder.Services.AddScoped<AuthFlowService>();
+builder.Services.AddScoped<UserInfoService>();
 builder.Services.AddDbContext<AuthDbContext>(db => db.UseSqlServer(options.DatabaseUrl));
 
 if (options.SmsProviderUrl is null)

@@ -153,8 +153,8 @@ The rules that make "thin endpoints" mean something:
 
 | Rule | Enforcement |
 |------|-------------|
-| An endpoint may only bind input, call `ISender.Send`, and map the result to HTTP. | Code review; the `Api` project has no reference to `Infrastructure`. |
-| No `DbContext`, `TableClient`, `BlobClient`, or `HttpClient` in `Api`. | Project references make it impossible to compile. |
+| An endpoint may only bind input, call `ISender.Send`, and map the result to HTTP. | Code review; endpoints inject application ports, never storage clients. |
+| No `DbContext`, `TableClient`, `BlobClient`, or `HttpClient` in `Api` endpoint files. | Only `Program.cs` and the `AddInfrastructure` extension may reference them; everything else resolves interfaces declared in `Application`. |
 | No business rules in handlers that belong to entities. | Domain project owns invariants; handlers orchestrate. |
 | Every third-party dependency is behind an interface declared in `Application`. | Adapters live in `Infrastructure` and are registered in the composition root. |
 | Cross-cutting concerns are pipeline behaviours, not repeated code. | Logging, validation, and timing behaviours in `Application`. |
@@ -217,6 +217,7 @@ sequenceDiagram
 | POST | `/auth/login` | Verify username/password, create MFA challenge, trigger SMS. |
 | POST | `/auth/challenges/{challenge_id}/verify` | Verify OTP, return access token. |
 | POST | `/auth/challenges/{challenge_id}/resend` | Re-send OTP, subject to cooldown. |
+| GET | `/auth/userinfo` | Bearer-protected profile (`id`, `name`, `phone`, `org`) read from `auth.users`; the token is verified locally against the current and previous signing keys. |
 | GET | `/.well-known/openid-configuration` | Issuer metadata (`issuer`, `jwks_uri`). |
 | GET | `/.well-known/jwks.json` | Public signing keys. |
 | GET | `/healthz` | Liveness for Compose. |
@@ -308,7 +309,7 @@ except `/healthz`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| GET | `/api/v1/me` | Profile: id, name, phone, org. |
+| GET | `/api/v1/me` | Profile: id, name, org from the token; phone comes from `/auth/userinfo`. |
 | GET | `/api/v1/me/cards` | All cards for the caller, in display order. |
 | GET | `/api/v1/me/cards/{card_id}/transactions` | Transactions for one card, newest first. |
 | GET | `/api/v1/cards/{card_id}/art` | Card artwork, streamed from blob storage. |
@@ -317,7 +318,9 @@ except `/healthz`.
 
 ### 7.1 Responses
 
-- `GET /me` → `{ "id", "name", "phone", "org" }`.
+- `GET /me` → `{ "id", "name", "org" }`, taken from the verified token. It
+  deliberately carries no phone number: the profile screen reads that from
+  `GET /auth/userinfo`, so PII does not travel in the token or its response.
 - `GET /me/cards` → `{ "items": [ { "id", "brand", "last4", "expiry_month",
   "expiry_year", "status", "currency", "display_order", "art_url" } ] }`.
 - Transactions → `{ "items": [ { "id", "card_id", "amount_minor", "currency",
@@ -464,15 +467,17 @@ rounds to zero here.
 
 ### 8.7 Seed and sync
 
-1. `auth` seeds one user (from env values) if the table is empty.
+1. `auth` seeds one user (from env values); in demo mode an existing account is
+   kept in step with `DEMO_USERNAME` / `DEMO_PASSWORD` / `DEMO_PHONE` and
+   `ORG_ID` instead of being left stale.
 2. `api` seeds three cards and their artwork (uploaded to `card-art`) if empty.
-3. `IssuerSyncService` (a hosted background service) calls the issuer for every
-   card at startup and every 5 minutes, upserting results into the transaction
-   store.
+3. `api` also seeds the deterministic transaction fixtures into Table Storage,
+   keyed so a re-run upserts rather than duplicates. Pulling the feed from the
+   issuer is a later slice (`IssuerSyncService`), which will replace the seed
+   without changing the read path.
 4. The UI therefore reads a warm, local feed and never waits on the issuer.
 
-The mock issuer serves deterministic fixture data, so a reset always produces
-the same demo.
+The fixtures are deterministic, so a reset always produces the same demo.
 
 ### 8.8 Schema evolution
 
@@ -561,6 +566,10 @@ The application logins cannot create, alter, or drop anything. If the API is
 compromised, the blast radius is rows, not schema — and that is the difference
 between an incident and a very bad day.
 
+In the local Compose setup the two one-shot migrators still authenticate as
+`sa`, the container bootstrap identity. A dedicated `sme_migrator` login with
+`db_owner` on both databases is the deployment target, not part of the demo.
+
 ### 8.9 Delivery pipeline shape
 
 The local `db-migrator` is a stand-in for what larger organisations run as a
@@ -617,7 +626,7 @@ disposable but not alien.
 | `/login` | Sign-in | Username, password, then OTP step. Demo hint visible in demo mode. |
 | `/wallet` | Card wallet | Grid of card tiles. Default route after sign-in. |
 | `/wallet/cards/:cardId` | Card detail | Card summary plus its transactions. |
-| `/profile` | Profile | Name, phone, organisation from `/me`. |
+| `/profile` | Profile | Name and organisation from `/me`; phone from `/auth/userinfo`. |
 
 ### 9.3 Wallet experience
 
@@ -687,12 +696,16 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 | `DEMO_USERNAME` / `DEMO_PASSWORD` / `DEMO_PHONE` | auth | demo values |
 | `DEMO_OTP` | auth | `123456` |
 | `JWT_ISSUER` / `JWT_AUDIENCE` / `JWT_TTL` | auth, api | `http://auth:8081`, `sme-demo-api`, `30m` |
-| `JWKS_URL` / `AUTH_METADATA_URL` | api | `http://auth:8081/.well-known/...` |
+| `AUTH_METADATA_URL` | api | `http://auth:8081/.well-known/openid-configuration` |
 | `SMS_PROVIDER_URL` | auth | `http://sms-mock:8083` |
 | `ISSUER_BASE_URL` / `ISSUER_API_KEY` | api | `http://issuer-mock:8084`, fake key |
-| `AZURE_STORAGE_CONNECTION_STRING` | api | `UseDevelopmentStorage=true` (blobs and tables) |
-| `TRANSACTIONS_TABLE` | api | `transactions` |
-| `DATABASE_URL` (auth/api) | auth, api | Compose-internal DSNs |
+| `AZURE_STORAGE_CONNECTION_STRING` | api | `UseDevelopmentStorage=true` outside Docker; Compose sets explicit `BlobEndpoint`/`TableEndpoint` values |
+| `TRANSACTIONS_TABLE` / `CARD_ART_CONTAINER` | api | `transactions`, `card-art` |
+| `AUTH_REQUIRE_HTTPS_METADATA` | api | `true`; Compose sets `false` because auth is plain HTTP on its internal port |
+| `PUBLIC_BASE_URL` | api | `http://localhost:8082` |
+| `SEED_ENABLED` | api | `true` |
+| `DATABASE_URL` (auth/api) | auth, api | Compose-internal DSNs using the app logins |
+| `SME_API_DB_PASSWORD` / `SME_AUTH_DB_PASSWORD` | db-grants, api, auth | `.env` only; grants add `db_datareader` + `db_datawriter` |
 | `CORS_ORIGIN` | auth, api | `http://localhost:8080` |
 
 Secrets live in `.env` (git-ignored, with `.env.example` committed). No secret
@@ -704,7 +717,8 @@ is baked into an image.
 - `db-migrator` applies the idempotent schema scripts, then exits; `auth` and
   `api` start only after it succeeds.
 - Seed data is applied idempotently at start-up (one user, three cards, about
-  40 transactions fetched from the mock issuer).
+  40 transactions seeded locally; pulling them from the mock issuer is a later
+  slice).
 - `docker compose down -v && docker compose up` returns the demo to its initial
   state.
 
@@ -783,8 +797,8 @@ The demo is done when all of these hold on a clean machine:
 6. "Load more" paginates without duplicates.
 7. Refreshing the page keeps the session; expiry or cleared storage returns to
    sign-in.
-8. `/profile` shows the name, phone, and organisation from the API, not from the
-   token.
+8. `/profile` shows the name, phone, and organisation from the auth userinfo
+   endpoint plus the API `/me` response, not from the token.
 9. Signing out clears the session and returns to `/login`.
 10. With the network disconnected after build, the demo still passes steps 2–9.
 11. Stopping `issuer-mock` leaves the wallet usable and logs a handled upstream

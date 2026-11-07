@@ -21,6 +21,7 @@ services:
       - sme
 
   # One-shot. Applies db/migrations/api to the API database, then exits.
+  # It keeps using sa: the migrator is the schema-owner identity.
   db-migrator:
     build:
       context: .
@@ -55,6 +56,66 @@ services:
     networks:
       - sme
 
+  # One-shot. Creates the two application logins and grants each one only
+  # db_datareader + db_datawriter in its own database (requirements §8.8,
+  # acceptance 15). No DDL rights are granted. Passwords come from .env via
+  # sqlcmd variables, never from an image or this file.
+  db-grants:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - >-
+        /opt/mssql-tools18/bin/sqlcmd -S mssql -U sa -P "$$MSSQL_SA_PASSWORD" -C -b
+        -v SME_API_DB_PASSWORD="$$SME_API_DB_PASSWORD"
+        SME_AUTH_DB_PASSWORD="$$SME_AUTH_DB_PASSWORD"
+        -i /bootstrap/app-logins.sql
+    environment:
+      MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?create .env from .env.example}"
+      SME_API_DB_PASSWORD: "${SME_API_DB_PASSWORD:?set SME_API_DB_PASSWORD in .env}"
+      SME_AUTH_DB_PASSWORD: "${SME_AUTH_DB_PASSWORD:?set SME_AUTH_DB_PASSWORD in .env}"
+    volumes:
+      - ./db/bootstrap:/bootstrap:ro
+    depends_on:
+      mssql:
+        condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
+      db-migrator-auth:
+        condition: service_completed_successfully
+    restart: "no"
+    networks:
+      - sme
+
+  # Table Storage for the transaction feed and Blob Storage for card artwork.
+  # Ports stay internal; only the API can reach them.
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    command:
+      - "azurite"
+      - "--blobHost"
+      - "0.0.0.0"
+      - "--tableHost"
+      - "0.0.0.0"
+      - "--queueHost"
+      - "0.0.0.0"
+      - "--location"
+      - "/data"
+      # The Azure SDK ships a newer Storage API version than the current
+      # Azurite release understands; this flag keeps the emulator usable.
+      - "--skipApiVersionCheck"
+    volumes:
+      - azurite-data:/data
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "node -e \"const net=require('net');const check=p=>new Promise((resolve,reject)=>{const s=net.connect(p,'127.0.0.1',()=>{s.end();resolve()});s.on('error',reject)});Promise.all([check(10000),check(10002)]).then(()=>process.exit(0)).catch(()=>process.exit(1))\""
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    networks:
+      - sme
+
   auth:
     build:
       context: .
@@ -62,7 +123,7 @@ services:
     image: sme-demo-auth:local
     environment:
       ASPNETCORE_URLS: "http://+:8081"
-      DATABASE_URL: "Server=mssql;Database=sme_auth;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
+      DATABASE_URL: "Server=mssql;Database=sme_auth;User Id=sme_auth_app;Password=${SME_AUTH_DB_PASSWORD:?set SME_AUTH_DB_PASSWORD in .env};TrustServerCertificate=True"
       ORG_ID: "${ORG_ID:-sme}"
       DEMO_MODE: "${DEMO_MODE:-true}"
       DEMO_USERNAME: "${DEMO_USERNAME:-demo}"
@@ -74,9 +135,6 @@ services:
       JWT_TTL: "${JWT_TTL:-30m}"
       CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
       SMS_PROVIDER_URL: "${SMS_PROVIDER_URL:-}"
-      # Consumed by the resource API when it lands; recorded here per §10.3.
-      AUTH_METADATA_URL: "http://auth:8081/.well-known/openid-configuration"
-      JWKS_URL: "http://auth:8081/.well-known/jwks.json"
     ports:
       - "8081:8081"
     volumes:
@@ -85,6 +143,8 @@ services:
       mssql:
         condition: service_healthy
       db-migrator-auth:
+        condition: service_completed_successfully
+      db-grants:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -97,6 +157,55 @@ services:
     networks:
       - sme
 
+  api:
+    build:
+      context: .
+      dockerfile: src/SmeDemo.Api/Dockerfile
+    image: sme-demo-api:local
+    environment:
+      ASPNETCORE_URLS: "http://+:8082"
+      ASPNETCORE_ENVIRONMENT: "Development"
+      DATABASE_URL: "Server=mssql;Database=sme_api;User Id=sme_api_app;Password=${SME_API_DB_PASSWORD:?set SME_API_DB_PASSWORD in .env};TrustServerCertificate=True"
+      ORG_ID: "${ORG_ID:-sme}"
+      JWT_ISSUER: "${JWT_ISSUER:-http://auth:8081}"
+      JWT_AUDIENCE: "${JWT_AUDIENCE:-sme-demo-api}"
+      AUTH_METADATA_URL: "http://auth:8081/.well-known/openid-configuration"
+      # The demo's auth service is plain HTTP inside the Compose network. This
+      # is development-only: the default is true, and only this file turns it
+      # off so a metadata fetch to auth:8081 works without TLS.
+      AUTH_REQUIRE_HTTPS_METADATA: "false"
+      CORS_ORIGIN: "${CORS_ORIGIN:-http://localhost:8080}"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;TableEndpoint=http://azurite:10002/devstoreaccount1;"
+      TRANSACTIONS_TABLE: "transactions"
+      CARD_ART_CONTAINER: "card-art"
+      PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-http://localhost:8082}"
+      SEED_ENABLED: "${SEED_ENABLED:-true}"
+    ports:
+      - "8082:8082"
+    depends_on:
+      mssql:
+        condition: service_healthy
+      db-migrator:
+        condition: service_completed_successfully
+      db-migrator-auth:
+        condition: service_completed_successfully
+      db-grants:
+        condition: service_completed_successfully
+      auth:
+        condition: service_healthy
+      azurite:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "curl -fsS http://localhost:8082/healthz || exit 1"
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 60s
+    networks:
+      - sme
+
 networks:
   sme:
     driver: bridge
@@ -104,3 +213,4 @@ networks:
 volumes:
   mssql-data:
   auth-keys:
+  azurite-data:

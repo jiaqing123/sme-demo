@@ -62,4 +62,22 @@ public sealed class AuthUser
         ArgumentException.ThrowIfNullOrWhiteSpace(passwordHash);
         PasswordHash = passwordHash;
     }
+
+    /// <summary>
+    /// Keeps the demo account in step with the environment values. Without this,
+    /// changing <c>DEMO_USERNAME</c>, <c>DEMO_PHONE</c>, or <c>ORG_ID</c> would
+    /// silently affect only a freshly seeded database.
+    /// </summary>
+    public void UpdateProfile(string orgId, string username, string name, string phone)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(orgId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(username);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentException.ThrowIfNullOrWhiteSpace(phone);
+
+        OrgId = orgId;
+        Username = username;
+        Name = name;
+        Phone = phone;
+    }
 }

@@ -27,5 +27,11 @@ public sealed record DiscoveryResponse(
 public sealed record JwksResponse(
     [property: JsonPropertyName("keys")] IReadOnlyList<IReadOnlyDictionary<string, object>> Keys);
 
+public sealed record UserInfoResponse(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("phone")] string Phone,
+    [property: JsonPropertyName("org")] string Org);
+
 public sealed record HealthResponse(
     [property: JsonPropertyName("status")] string Status);

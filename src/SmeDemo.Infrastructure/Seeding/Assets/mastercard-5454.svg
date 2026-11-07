@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="404" viewBox="0 0 640 404" role="img" aria-label="Mastercard card ending 5454">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2b2b"/>
+      <stop offset="1" stop-color="#5a5a5a"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="404" rx="28" fill="url(#bg)"/>
+  <circle cx="80" cy="340" r="150" fill="#ffffff" opacity="0.06"/>
+  <text x="44" y="88" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700" letter-spacing="2">SME DEMO</text>
+  <rect x="44" y="168" width="62" height="46" rx="8" fill="#d8b45a"/>
+  <text x="44" y="300" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="34" letter-spacing="5">•••• 5454</text>
+  <text x="44" y="348" fill="#d8d8d8" font-family="Arial, Helvetica, sans-serif" font-size="20">03/27</text>
+  <circle cx="540" cy="330" r="26" fill="#eb001b" opacity="0.9"/>
+  <circle cx="574" cy="330" r="26" fill="#f79e1b" opacity="0.9"/>
+</svg>

@@ -16,6 +16,12 @@ public sealed record ApiProblem(
     public static ApiProblem Unauthenticated(string message) =>
         new(StatusCodes.Status401Unauthorized, ErrorCodes.Unauthenticated, message);
 
+    public static ApiProblem TokenExpired() =>
+        new(StatusCodes.Status401Unauthorized, ErrorCodes.TokenExpired, "Access token has expired.");
+
+    public static ApiProblem InvalidToken() =>
+        new(StatusCodes.Status401Unauthorized, ErrorCodes.InvalidToken, "The access token is not valid.");
+
     public static ApiProblem RateLimited(string message) =>
         new(StatusCodes.Status429TooManyRequests, ErrorCodes.RateLimited, message);
 
