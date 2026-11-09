@@ -1,5 +1,4 @@
-using System.Text.Json;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using SmeDemo.Api.Auth;
 using SmeDemo.Api.Configuration;
 using SmeDemo.Api.Endpoints;
@@ -8,6 +7,7 @@ using SmeDemo.Application;
 using SmeDemo.Infrastructure;
 using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Seeding;
+using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
 var options = ApiOptions.FromConfiguration(builder.Configuration);
@@ -117,6 +117,4 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapResourceEndpoints();
-app.Run();
-
-public partial class Program;
+await app.RunAsync();

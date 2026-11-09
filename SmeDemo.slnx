@@ -25,5 +25,7 @@
   <Folder Name="/tools/SmsMock/">
     <Project Path="tools/SmsMock/SmeDemo.SmsMock.csproj" />
   </Folder>
-  <Project Path="docker-compose.dcproj" />
+  <Project Path="docker-compose.dcproj">
+    <Build />
+  </Project>
 </Solution>

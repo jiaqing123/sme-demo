@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using SmeDemo.Auth.Challenges;
 using SmeDemo.Auth.Configuration;
@@ -91,6 +91,4 @@ app.Use(async (context, next) =>
 await AuthDbSeeder.SeedAsync(app.Services, options, CancellationToken.None);
 
 app.MapAuthEndpoints();
-app.Run();
-
-public partial class Program;
+await app.RunAsync();

@@ -1,4 +1,4 @@
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.Data.SqlClient;
 
 namespace SmeDemo.Migrator;
 
@@ -6,6 +6,7 @@ internal sealed record MigratorSettings(
     string ConnectionString,
     string DatabaseName,
     string MigrationsPath,
+    int MaxWaitAttempts,
     TimeSpan WaitTimeout)
 {
     public string MasterConnectionString =>
@@ -27,11 +28,15 @@ internal sealed record MigratorSettings(
 
         var migrationsPath = Environment.GetEnvironmentVariable("MIGRATIONS_PATH") ?? "/app/migrations";
 
+        var maxWaitAttempts = int.TryParse(Environment.GetEnvironmentVariable("DB_MAX_ATTEMPTS"), out var attempts)
+            ? attempts
+            : 60;
+
         var waitTimeout = TimeSpan.FromSeconds(
             int.TryParse(Environment.GetEnvironmentVariable("DB_WAIT_SECONDS"), out var seconds)
                 ? seconds
                 : 120);
 
-        return new MigratorSettings(connectionString, builder.InitialCatalog, migrationsPath, waitTimeout);
+        return new MigratorSettings(connectionString, builder.InitialCatalog, migrationsPath, maxWaitAttempts, waitTimeout);
     }
 }

@@ -1,4 +1,4 @@
-using SmeDemo.Migrator;
+﻿using SmeDemo.Migrator;
 
 try
 {
@@ -6,6 +6,6 @@ try
 }
 catch (Exception exception)
 {
-    Console.Error.WriteLine($"[migrator] FAILED: {exception.Message}");
+    await Console.Error.WriteLineAsync($"[migrator] FAILED: {exception.Message}");
     return 1;
 }

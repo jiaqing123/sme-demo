@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using SmeDemo.IssuerMock;
@@ -51,7 +51,7 @@ app.MapGet(
                 statusCode: StatusCodes.Status404NotFound);
     });
 
-app.Run();
+await app.RunAsync();
 
 static bool IsAuthorized(HttpRequest request, string apiKey)
 {
@@ -61,5 +61,3 @@ static bool IsAuthorized(HttpRequest request, string apiKey)
     return provided.Length == expected.Length &&
            CryptographicOperations.FixedTimeEquals(provided, expected);
 }
-
-public partial class Program;

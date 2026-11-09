@@ -1,4 +1,4 @@
-using Microsoft.Data.SqlClient;
+﻿using Microsoft.Data.SqlClient;
 
 namespace SmeDemo.Migrator;
 
@@ -42,7 +42,7 @@ internal static class MigratorRunner
     {
         var deadline = DateTime.UtcNow + settings.WaitTimeout;
 
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= settings.MaxWaitAttempts; attempt++)
         {
             try
             {

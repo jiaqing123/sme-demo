@@ -1,4 +1,4 @@
-name: sme-demo
+﻿name: sme-demo
 
 # Published ports bind to 127.0.0.1 on purpose. The demo ships a documented,
 # public password (demo / Demo_Passw0rd!) and a fixed OTP, so the services must

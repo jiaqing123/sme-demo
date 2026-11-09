@@ -1,7 +1,7 @@
+﻿using SmeDemo.SmsMock;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
 const int MaxBodyLength = 64 * 1024;
 
@@ -15,70 +15,15 @@ app.MapGet("/healthz", () => Results.Ok(new { status = "ok" }));
 // and returns a text/plain provider message id. Requirements §6.5.
 app.MapPost("/messages", async (HttpRequest request) =>
 {
-    string? body;
-    try
-    {
-        if (request.ContentLength > MaxBodyLength)
-        {
-            return ValidationError("body", "The request body must be 64 KB or smaller.");
-        }
+    var (message, readError) = await ReadSmsAsync(request, MaxBodyLength);
+    if (readError is not null) return readError;
 
-        var read = await ReadBodyAsync(request, MaxBodyLength);
-        if (read.TooLarge)
-        {
-            return ValidationError("body", "The request body must be 64 KB or smaller.");
-        }
-
-        body = read.Body;
-    }
-    catch (IOException)
-    {
-        // A client disconnect or an oversized/chunked body surfaces here. The
-        // contract keeps malformed input on the same 400 envelope.
-        return ValidationError("body", "The request body could not be read.");
-    }
-
-    if (body is null)
-    {
-        return ValidationError("body", "The request body could not be read.");
-    }
-
-    SmsRequest? message;
-    try
-    {
-        message = JsonSerializer.Deserialize<SmsRequest>(body);
-    }
-    catch (JsonException)
-    {
-        return ValidationError("body", "The request body could not be read as JSON.");
-    }
-
-    if (message is null)
-    {
-        return ValidationError("body", "The request body could not be read as JSON.");
-    }
-
-    var to = message.To?.Trim();
+    var to = message!.To?.Trim();
     var text = message.Text?.Trim();
+
     var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
-
-    if (string.IsNullOrEmpty(to))
-    {
-        errors["to"] = ["The 'to' field is required."];
-    }
-    else if (to.Length > 32)
-    {
-        errors["to"] = ["The 'to' field must be 32 characters or fewer."];
-    }
-
-    if (string.IsNullOrEmpty(text))
-    {
-        errors["text"] = ["The 'text' field is required."];
-    }
-    else if (text.Length > 1600)
-    {
-        errors["text"] = ["The 'text' field must be 1600 characters or fewer."];
-    }
+    ValidateField(errors, "to", to, maxLength: 32);
+    ValidateField(errors, "text", text, maxLength: 1600);
 
     if (errors.Count > 0)
     {
@@ -100,12 +45,52 @@ app.MapPost("/messages", async (HttpRequest request) =>
     // The plaintext log is the point of the mock: the demo OTP must be visible in
     // `docker compose logs sms-mock`. The recipient and body are the payload, so
     // they are recorded; the caller IP is deliberately not.
-    app.Logger.LogInformation("SMS to {To}: {Text}", to, text);
+    if (app.Logger.IsEnabled(LogLevel.Information))
+    {
+        app.Logger.LogInformation("SMS to {To}: {Text}", to, text);
+    }
 
     return Results.Text(providerMessageId, "text/plain", statusCode: StatusCodes.Status202Accepted);
 });
 
-app.Run();
+await app.RunAsync();
+
+static async Task<(SmsRequest? Message, IResult? Error)> ReadSmsAsync(HttpRequest request, int maxBodyLength)
+{
+    const string BodyTooLarge = "The request body must be 64 KB or smaller.";
+    const string BodyUnreadable = "The request body could not be read.";
+    const string BodyNotJson = "The request body could not be read as JSON.";
+
+    if (request.ContentLength > maxBodyLength)
+        return (null, ValidationError("body", BodyTooLarge));
+
+    string? body = null;
+    try
+    {
+        (body, var tooLarge) = await ReadBodyAsync(request, maxBodyLength);
+        if (tooLarge)
+            return (null, ValidationError("body", BodyTooLarge));
+    }
+    catch (IOException)
+    {
+        // A client disconnect or an oversized/chunked body surfaces here. Fall
+        // through to the null check so both paths share one error message.
+    }
+
+    if (body is null)
+        return (null, ValidationError("body", BodyUnreadable));
+
+    try
+    {
+        return JsonSerializer.Deserialize<SmsRequest>(body) is { } message
+            ? (message, null)
+            : (null, ValidationError("body", BodyNotJson));
+    }
+    catch (JsonException)
+    {
+        return (null, ValidationError("body", BodyNotJson));
+    }
+}
 
 static async Task<(string? Body, bool TooLarge)> ReadBodyAsync(HttpRequest request, int maxLength)
 {
@@ -144,8 +129,11 @@ static IResult ValidationError(string field, string message) =>
         },
         statusCode: StatusCodes.Status400BadRequest);
 
-internal sealed record SmsRequest(
-    [property: JsonPropertyName("to")] string? To,
-    [property: JsonPropertyName("text")] string? Text);
-
-public partial class Program;
+static void ValidateField(
+    Dictionary<string, string[]> errors, string field, string? value, int maxLength)
+{
+    if (string.IsNullOrEmpty(value))
+        errors[field] = [$"The '{field}' field is required."];
+    else if (value.Length > maxLength)
+        errors[field] = [$"The '{field}' field must be {maxLength} characters or fewer."];
+}
