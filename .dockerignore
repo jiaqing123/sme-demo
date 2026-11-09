@@ -6,6 +6,7 @@ web/dist/
 web/coverage/
 .git/
 .github/
+.vs/
 docs/
 progress/
 *.md

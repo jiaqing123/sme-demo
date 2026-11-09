@@ -907,7 +907,7 @@ Rules:
 - Kubernetes manifests or Helm values are the usual shape of that repository at
   scale. They are out of scope here, because there is no cluster to deploy to.
 
-For this demo, `compose.yaml` in this repository is the entire deployment. When
+For this demo, `docker-compose.yml` in this repository is the entire deployment. When
 the demo earns a server, the split applies unchanged: a small
 `sme-demo-deploy` repository holding the compose file or Helm values, and a
 pipeline that applies it on merge.

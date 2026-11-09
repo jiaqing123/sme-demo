@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Build context is the repository root (compose.yaml sets context: .).
+# Build context is the repository root (docker-compose.yml sets context: .).
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 

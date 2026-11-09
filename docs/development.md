@@ -33,7 +33,8 @@ tests/SmeDemo.Application.Tests    handler and validator unit tests
 tests/SmeDemo.Api.Tests            integration tests through WebApplicationFactory
 tests/SmeDemo.Auth.Tests           challenge-rule and token-claim tests
 tests/SmeDemo.Infrastructure.Tests IssuerSyncService tests against fake ports/InMemory EF
-compose.yaml                       SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
+docker-compose.yml                 SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
+docker-compose.dcproj              Visual Studio Compose project (F5 debugging of auth and API)
 docs/                              requirements, licensing, workshop
 ```
 
@@ -71,6 +72,39 @@ docker exec sme-demo-mssql-1 /opt/mssql-tools18/bin/sqlcmd `
 ```
 
 You should see `users` and `__EFMigrationsHistory`.
+
+## Visual Studio and Docker Compose
+
+`SmeDemo.slnx` contains `docker-compose.dcproj`, the Visual Studio orchestration
+project for `docker-compose.yml`. Open the solution, set `docker-compose` as the
+startup project and choose a launch profile:
+
+| Profile | What starts |
+|---------|-------------|
+| SME Demo (compose) | every service; breakpoints work in `SmeDemo.Api` and `SmeDemo.Auth` |
+| SME Demo (API only) | the dependencies and the API, without `web` |
+
+Create `.env` first, as in [First run](#first-run). F5 runs the Debug
+configuration in Fast mode: Visual Studio builds only each Dockerfile's `base`
+stage, mounts the project directory over `/app` and launches the locally built
+assembly there. That is why the API and auth Dockerfiles keep a separate runtime
+stage named `base`. The debuggee assembly paths and the `base` build target come
+from `docker-compose.vs.debug.yml`, which Visual Studio merges only for debugging
+and `docker compose up` ignores. If a project's target framework changes, update
+the two `bin/Debug/net…` paths in that file.
+
+Visual Studio and the CLI share the `sme-demo` Compose project name and the same
+volumes, so stop the CLI stack before pressing F5:
+
+```powershell
+docker compose down
+```
+
+The `db-migrator`, `db-migrator-auth`, `db-grants`, `azurite`, `sms-mock` and
+`issuer-mock` services are not debugged. In particular, the one-shot migrators
+must not get Visual Studio's watch-and-wait entrypoint, or they would never
+complete and `db-grants` would wait forever. They are listed in
+`DockerComposeProjectsToIgnore` and run from the normal Compose definition.
 
 ## Auth service
 

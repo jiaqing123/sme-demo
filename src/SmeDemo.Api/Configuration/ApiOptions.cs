@@ -64,7 +64,7 @@ public sealed record ApiOptions(
             AuthMetadataUrl: metadataUrl,
             JwtIssuer: jwtIssuer,
             JwtAudience: Read(configuration, "JWT_AUDIENCE", "sme-demo-api"),
-            // Secure by default; compose.yaml is the only place that turns this
+            // Secure by default; docker-compose.yml is the only place that turns this
             // off, with the reason documented there.
             RequireHttpsMetadata: ReadBool(configuration, "AUTH_REQUIRE_HTTPS_METADATA", fallback: true),
             PublicBaseUrl: publicBaseUrl,

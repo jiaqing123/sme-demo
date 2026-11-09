@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="15.0" Sdk="Microsoft.Docker.Sdk">
+
+  <!--
+    Visual Studio entry point for the Docker Compose stack.
+
+    Opening docker-compose.yml in Visual Studio only gives IntelliSense. Adding
+    this project to a solution makes Visual Studio treat the stack as an
+    orchestration project: Solution Explorer shows the compose files and the
+    services, and F5 becomes "Docker Compose" debugging for the services listed
+    in launchSettings.json next to this file.
+
+    Keep DockerComposeProjectName in sync with the top-level `name:` in
+    docker-compose.yml. Visual Studio otherwise generates a name of its own and
+    starts a second set of containers and volumes next to the CLI's stack.
+
+    DockerDevelopmentMode stays at its default (Fast for Debug). Fast mode
+    builds only the `base` stage of each Dockerfile and mounts the locally
+    built app into the container, so the API and auth Dockerfiles keep a
+    separate runtime stage named `base`.
+  -->
+  <PropertyGroup Label="Globals">
+    <ProjectVersion>2.1</ProjectVersion>
+    <ProjectGuid>{6B0B0F6E-0F1A-4B7A-9E4C-2F4C5B8A1D77}</ProjectGuid>
+    <DockerTargetOS>Linux</DockerTargetOS>
+    <DockerComposeProjectName>sme-demo</DockerComposeProjectName>
+    <DependencyAwareStart>true</DependencyAwareStart>
+    <!--
+      Only the API and auth are .NET apps we want to debug. Ignoring the other
+      service projects keeps Visual Studio from replacing their entrypoints
+      with its watch-and-wait helper, which would stop the one-shot migrators
+      from ever completing and leave db-grants waiting forever.
+    -->
+    <DockerComposeProjectsToIgnore>tools\Migrator\SmeDemo.Migrator.csproj;tools\IssuerMock\SmeDemo.IssuerMock.csproj;tools\SmsMock\SmeDemo.SmsMock.csproj</DockerComposeProjectsToIgnore>
+    <DockerLaunchAction>LaunchBrowser</DockerLaunchAction>
+    <DockerServiceName>web</DockerServiceName>
+    <DockerServiceUrl>http://localhost:8080</DockerServiceUrl>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="docker-compose.yml" />
+    <None Include="docker-compose.vs.debug.yml">
+      <DependentUpon>docker-compose.yml</DependentUpon>
+    </None>
+    <None Include=".dockerignore" />
+  </ItemGroup>
+
+</Project>

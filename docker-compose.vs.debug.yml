@@ -1,0 +1,28 @@
+# Visual Studio debug overrides (Fast mode, Debug configuration only).
+#
+# Visual Studio merges this file after its generated
+# obj/Docker/docker-compose.vs.debug.g.yml. It is never read by a plain
+# `docker compose up`, so the CLI keeps building the final Release images.
+#
+# Fast mode builds only the Dockerfile's `base` stage and bind-mounts each
+# project directory over /app, then launches the locally built assembly from
+# bin/Debug/net10.0. Visual Studio's generated file leaves the assembly path
+# empty for this solution, so it is set explicitly here. If a project's target
+# framework changes, update the two paths below.
+
+services:
+  api:
+    build:
+      target: base
+      args:
+        BUILD_CONFIGURATION: Debug
+    labels:
+      com.microsoft.visualstudio.debuggee.arguments: '--additionalProbingPath /.nuget/packages --additionalProbingPath /.nuget/fallbackpackages --additionalProbingPath /.nuget/fallbackpackages2 "/app/bin/Debug/net10.0/SmeDemo.Api.dll"'
+
+  auth:
+    build:
+      target: base
+      args:
+        BUILD_CONFIGURATION: Debug
+    labels:
+      com.microsoft.visualstudio.debuggee.arguments: '--additionalProbingPath /.nuget/packages --additionalProbingPath /.nuget/fallbackpackages --additionalProbingPath /.nuget/fallbackpackages2 "/app/bin/Debug/net10.0/SmeDemo.Auth.dll"'

@@ -75,6 +75,18 @@ so the stack is reachable from this machine only: the demo password and OTP are
 public by design. Details, the smoke tests, and the schema-change workflow are in
 [`docs/development.md`](docs/development.md).
 
+### Visual Studio
+
+`SmeDemo.slnx` includes `docker-compose.dcproj`, so Visual Studio 2026 treats
+the stack as an orchestration project. Open the solution, set `docker-compose`
+as the startup project, pick the **SME Demo (compose)** launch profile and press
+F5: the whole stack starts and breakpoints work in `SmeDemo.Api` and
+`SmeDemo.Auth`. **SME Demo (API only)** starts just the API and its dependencies.
+Visual Studio and the CLI share the same `sme-demo` Compose project name and
+volumes, so stop one before starting the other. Create `.env` first, as above.
+See [`docs/development.md`](docs/development.md#visual-studio-and-docker-compose)
+for the details.
+
 ## Repository layout
 
 ```
@@ -101,7 +113,8 @@ tools/Migrator                      one-shot schema applier
 db/migrations/api/                  generated idempotent API SQL scripts
 db/migrations/auth/                 generated idempotent auth SQL scripts
 db/bootstrap/                       read/write-only application login script
-compose.yaml                        SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API, web
+docker-compose.yml                  SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API, web
+docker-compose.dcproj               Visual Studio Docker Compose project (F5 debugging of auth and API)
 ```
 
 ## Audience

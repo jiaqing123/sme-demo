@@ -1,0 +1,42 @@
+{
+  "profiles": {
+    "SME Demo (compose)": {
+      "commandName": "DockerCompose",
+      "commandVersion": "1.0",
+      "composeLaunchAction": "LaunchBrowser",
+      "composeLaunchServiceName": "web",
+      "composeLaunchUrl": "http://localhost:8080",
+      "serviceActions": {
+        "mssql": "StartWithoutDebugging",
+        "db-migrator": "StartWithoutDebugging",
+        "db-migrator-auth": "StartWithoutDebugging",
+        "db-grants": "StartWithoutDebugging",
+        "azurite": "StartWithoutDebugging",
+        "sms-mock": "StartWithoutDebugging",
+        "issuer-mock": "StartWithoutDebugging",
+        "auth": "StartDebugging",
+        "api": "StartDebugging",
+        "web": "StartWithoutDebugging"
+      }
+    },
+    "SME Demo (API only)": {
+      "commandName": "DockerCompose",
+      "commandVersion": "1.0",
+      "composeLaunchAction": "LaunchBrowser",
+      "composeLaunchServiceName": "api",
+      "composeLaunchUrl": "http://localhost:8082/healthz",
+      "serviceActions": {
+        "mssql": "StartWithoutDebugging",
+        "db-migrator": "StartWithoutDebugging",
+        "db-migrator-auth": "StartWithoutDebugging",
+        "db-grants": "StartWithoutDebugging",
+        "azurite": "StartWithoutDebugging",
+        "sms-mock": "StartWithoutDebugging",
+        "issuer-mock": "StartWithoutDebugging",
+        "auth": "StartWithoutDebugging",
+        "api": "StartDebugging",
+        "web": "DoNotStart"
+      }
+    }
+  }
+}

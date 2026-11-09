@@ -13,6 +13,7 @@ desktop.ini
 .idea/
 *.iml
 .vscode/
+.vs/
 
 # Secrets and local config
 .env
