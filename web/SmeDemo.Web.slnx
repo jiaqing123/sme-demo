@@ -1,0 +1,6 @@
+<Solution>
+  <!-- Front-end-only solution: open this in Visual Studio to run and debug the
+       Vite SPA. The .NET solution stays JS-free so `dotnet build SmeDemo.slnx`
+       keeps working in CI, where Node.js is not installed. -->
+  <Project Path="SmeDemo.Web.esproj" />
+</Solution>

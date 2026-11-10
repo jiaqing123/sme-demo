@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.VisualStudio.JavaScript.Sdk/1.0.6537497">
+
+  <!--
+    Visual Studio (JavaScript Project System) wrapper for the Vite SPA.
+
+    This file only teaches Visual Studio how to restore, build, test and run the
+    npm scripts in package.json. npm remains the source of truth: the .NET
+    solution (SmeDemo.slnx) deliberately does not reference this project, because
+    the CI .NET job has no Node.js and builds the solution with `dotnet build`.
+    Open web/SmeDemo.Web.slnx in Visual Studio to work on the front end.
+
+    The SDK version is pinned to the one bundled with Visual Studio 2026 18.11.
+    If the project fails to load after a Visual Studio update, raise the version
+    to the Microsoft.VisualStudio.JavaScript.Sdk version installed under
+    %ProgramData%\Microsoft\VisualStudio\Packages.
+  -->
+
+  <PropertyGroup>
+    <StartupCommand>npm run dev</StartupCommand>
+    <BuildCommand>npm run build</BuildCommand>
+    <TestCommand>npm test</TestCommand>
+    <JavaScriptTestRoot>src</JavaScriptTestRoot>
+    <JavaScriptTestFramework>Vitest</JavaScriptTestFramework>
+  </PropertyGroup>
+
+</Project>

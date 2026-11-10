@@ -87,6 +87,13 @@ volumes, so stop one before starting the other. Create `.env` first, as above.
 See [`docs/development.md`](docs/development.md#visual-studio-and-docker-compose)
 for the details.
 
+For front-end work, `web/SmeDemo.Web.esproj` puts the Vite SPA in Solution
+Explorer: start it with **Debug > Start New Instance** (or make it the startup
+project) and `npm run dev` serves `http://localhost:5173`, proxying `/auth` and
+`/api` to the running `auth` and `api` containers. **Build Solution** runs the
+TypeScript check and the production build. See
+[`docs/development.md`](docs/development.md#visual-studio-2026).
+
 ## Repository layout
 
 ```
@@ -100,6 +107,7 @@ src/SmeDemo.Domain                  entities and invariants
 src/SmeDemo.Infrastructure          EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                    independent JWT issuer, own DbContext and migration
 web/                                React + TypeScript + Vite SPA (nginx in Compose)
+web/SmeDemo.Web.esproj              JavaScript project so Visual Studio runs the SPA's npm scripts
 tools/SmsMock                       stand-in SMS gateway that logs each message
 tools/IssuerMock                    deterministic card-issuer stand-in
 tests/IssuerMock.Tests              issuer fixture/auth/ordering tests
