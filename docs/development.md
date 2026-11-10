@@ -134,12 +134,15 @@ The `db-migrator-1`, `db-migrator-auth-1` and `db-grants-1` containers showing
 `Exited (0)` in `docker compose ps -a` is the expected end state for those
 one-shot services.
 
-### F5 fails before any container exists
+### The F5 popup (0x80070057)
 
 Visual Studio reports a failed Compose launch as a generic debugger error,
 typically `Unable to start debugging. Operation not supported. Unknown error:
-0x80070057.`, and its output pane is not always populated. Run the stack from
-the CLI first to see the real message:
+0x80070057.`, and its output pane is not always populated. The same popup covers
+two very different situations; the containers tell you which one you have:
+
+**Nothing starts.** Then the launch really failed. Run the stack from the CLI to
+see the message Visual Studio hides:
 
 ```powershell
 docker compose up -d
@@ -161,13 +164,53 @@ Compose aborts every pending container the same way. The windows in
 raise the offending service's `start_period` and `retries`. Re-running
 `docker compose up -d` converges the stack, and the migrators are idempotent.
 
-If the containers do come up but the popup persists, the container debugger
-bits in your profile are stale, which is a known Visual Studio problem. Delete
-them so the next F5 downloads current ones:
+**Everything starts and debugging works.** Then the popup is a Visual Studio
+defect, not a repository one, and it is safe to dismiss: the failing call is
+fire-and-forget, so the debug session proceeds without it. Confirm with
+`docker compose ps` (the services are healthy) and by loading the app at
+<http://localhost:8080>. The activity log names the failure precisely — a
+`COMException (0x89710015)` raised inside the Compose project system's launch
+provider:
+
+```
+System.Runtime.InteropServices.COMException (0x89710015): Unable to start debugging.
+Operation not supported. Unknown error: 0x80070057.
+   at Microsoft.VisualStudio.Shell.Interop.IVsDebugger4.LaunchDebugTargets4(...)
+   at Microsoft.VisualStudio.Docker.Compose.ProjectSystem.DebugLaunchProvider.<LaunchContainerAsync>...
+```
+
+and, in the same launch, a failed activation of the debugger's Edit and Continue
+service:
+
+```
+ServiceActivationFailedException: Activating the
+"Microsoft.VisualStudio.Debugger.ManagedEditAndContinueVsdbgEngineService (0.1)"
+service failed. ---> System.InvalidCastException: Unable to cast object of type
+'...EditAndContinueVsdbgEngineServiceFactory' to type '...IManagedEditAndContinueEngineService'.
+```
+
+To capture that yourself, start Visual Studio with `/Log` — the switch takes an
+optional file name, and without one the log is written on exit to
+`%APPDATA%\Microsoft\VisualStudio\18.0_<instance>\ActivityLog.xml`:
 
 ```powershell
-Remove-Item -Recurse -Force "$env:USERPROFILE\vsdbg"
+& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\IDE\devenv.exe" `
+  "D:\GitHub\sme-demo\SmeDemo.slnx" /Log
 ```
+
+Observed on 18.11.12328.437. Deleting `%USERPROFILE%\vsdbg` only makes Visual
+Studio reinstall the same 18.10.10709.3 build and changes nothing, so the cached
+debugger bits are not the cause; 18.11 has no standalone "Enable Edit and
+Continue" option to switch the failing service off either. A repair or update of
+the Visual Studio installation is the remaining lever.
+
+Do not try to silence the popup by removing `DependencyAwareStart` from
+`docker-compose.dcproj`. Fast mode gives each debuggee a
+`DistrolessHelper --wait` entrypoint that launches the app only after the
+debugger attaches, so a single blocking `compose up` then waits for a health
+check that can never pass: `auth` stays `unhealthy`, `api` and `web` are "not
+started", and Compose fails with `DT1001`. The property is what makes Fast-mode
+debugging start services one at a time and attach in between.
 
 ## Auth service
 
