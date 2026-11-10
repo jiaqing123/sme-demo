@@ -1,4 +1,4 @@
-﻿name: sme-demo
+name: sme-demo
 
 # Published ports bind to 127.0.0.1 on purpose. The demo ships a documented,
 # public password (demo / Demo_Passw0rd!) and a fixed OTP, so the services must
@@ -111,14 +111,22 @@ services:
       - "--skipApiVersionCheck"
     volumes:
       - azurite-data:/data
+    # Azurite is the one service every other service waits for, and on a cold
+    # Docker Desktop it is also one of the slowest to answer: the first start
+    # unpacks the image and replays the data volume while SQL Server is still
+    # warming up. With a short window it was marked unhealthy, and Compose
+    # aborted the whole `up` ("dependency failed to start") before the
+    # migrators, api and auth were ever created. Visual Studio then surfaces
+    # only "Unable to start debugging" (0x80070057) for the same abort, so the
+    # window is deliberately generous: 120s to start plus 30 x 10s of retries.
     healthcheck:
       test:
         - "CMD-SHELL"
         - "node -e \"const net=require('net');const check=p=>new Promise((resolve,reject)=>{const s=net.connect(p,'127.0.0.1',()=>{s.end();resolve()});s.on('error',reject)});Promise.all([check(10000),check(10002)]).then(()=>process.exit(0)).catch(()=>process.exit(1))\""
-      interval: 5s
-      timeout: 3s
-      retries: 12
-      start_period: 5s
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
     networks:
       - sme
 

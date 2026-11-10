@@ -10,6 +10,8 @@ namespace SmeDemo.Migrator;
 /// </summary>
 internal static class MigratorRunner
 {
+    private static readonly TimeSpan RetryDelay = TimeSpan.FromSeconds(2);
+
     public static async Task<int> RunAsync()
     {
         var settings = MigratorSettings.FromEnvironment();
@@ -18,6 +20,7 @@ internal static class MigratorRunner
 
         await WaitForServerAsync(settings);
         await EnsureDatabaseAsync(settings);
+        await WaitForDatabaseAsync(settings);
 
         var scripts = Directory.Exists(settings.MigrationsPath)
             ? Directory.GetFiles(settings.MigrationsPath, "*.sql").Order(StringComparer.OrdinalIgnoreCase).ToArray()
@@ -41,6 +44,7 @@ internal static class MigratorRunner
     private static async Task WaitForServerAsync(MigratorSettings settings)
     {
         var deadline = DateTime.UtcNow + settings.WaitTimeout;
+        SqlException? last = null;
 
         for (var attempt = 1; attempt <= settings.MaxWaitAttempts; attempt++)
         {
@@ -51,12 +55,66 @@ internal static class MigratorRunner
                 Console.WriteLine($"[migrator] SQL Server reachable after {attempt} attempt(s).");
                 return;
             }
-            catch (SqlException exception) when (DateTime.UtcNow < deadline)
+            catch (SqlException exception)
             {
+                last = exception;
+                if (attempt >= settings.MaxWaitAttempts || DateTime.UtcNow >= deadline)
+                {
+                    break;
+                }
+
                 Console.WriteLine($"[migrator] waiting for SQL Server (attempt {attempt}): {exception.Message}");
-                await Task.Delay(TimeSpan.FromSeconds(2));
+                await Task.Delay(RetryDelay);
             }
         }
+
+        throw new TimeoutException(
+            $"SQL Server did not accept a connection within {settings.WaitTimeout} " +
+            $"({settings.MaxWaitAttempts} attempts). Is the database ready?",
+            last);
+    }
+
+    /// <summary>
+    /// Waits until the target database can actually be opened. Being able to
+    /// open the <c>master</c> connection is not the same thing: a database that
+    /// was just created, or one SQL Server is still recovering after an unclean
+    /// stop, answers "Cannot open database ... The login failed." until it is
+    /// online. Without this wait the migrator fails on the first script and the
+    /// one-shot containers gate every other service behind a non-zero exit.
+    /// </summary>
+    private static async Task WaitForDatabaseAsync(MigratorSettings settings)
+    {
+        var deadline = DateTime.UtcNow + settings.WaitTimeout;
+        SqlException? last = null;
+
+        for (var attempt = 1; attempt <= settings.MaxWaitAttempts; attempt++)
+        {
+            try
+            {
+                await using var connection = new SqlConnection(settings.ConnectionString);
+                await connection.OpenAsync();
+                Console.WriteLine($"[migrator] database {settings.DatabaseName} is online after {attempt} attempt(s).");
+                return;
+            }
+            catch (SqlException exception)
+            {
+                last = exception;
+                if (attempt >= settings.MaxWaitAttempts || DateTime.UtcNow >= deadline)
+                {
+                    break;
+                }
+
+                Console.WriteLine(
+                    $"[migrator] waiting for database {settings.DatabaseName} " +
+                    $"(attempt {attempt}): {exception.Message}");
+                await Task.Delay(RetryDelay);
+            }
+        }
+
+        throw new TimeoutException(
+            $"database {settings.DatabaseName} did not come online within {settings.WaitTimeout} " +
+            $"({settings.MaxWaitAttempts} attempts).",
+            last);
     }
 
     private static async Task EnsureDatabaseAsync(MigratorSettings settings)
