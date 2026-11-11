@@ -10,23 +10,38 @@ public static class AuthEndpoints
 {
     public static IEndpointRouteBuilder MapAuthEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/healthz", () => Results.Ok(new HealthResponse("ok")));
+        // The auth service has no authorization middleware: every route is
+        // anonymous. The metadata is still explicit so the trust boundary is
+        // visible on the endpoint and cannot be changed by a future fallback
+        // policy without a deliberate edit here.
+        app.MapGet("/healthz", () => Results.Ok(new HealthResponse("ok")))
+            .AllowAnonymous();
 
         app.MapGet("/.well-known/openid-configuration", (AuthOptions options) =>
             Results.Ok(new DiscoveryResponse(
                 options.JwtIssuer,
                 $"{options.JwtIssuer}/.well-known/jwks.json",
-                ["RS256"])));
+                ["RS256"])))
+            .AllowAnonymous();
 
         app.MapGet("/.well-known/jwks.json", (SigningKeyStore keys) =>
-            Results.Ok(new JwksResponse(keys.PublicJwks)));
+            Results.Ok(new JwksResponse(keys.PublicJwks)))
+            .AllowAnonymous();
 
         var auth = app.MapGroup("/auth");
 
-        auth.MapPost("/login", LoginAsync);
-        auth.MapPost("/challenges/{challengeId}/verify", VerifyAsync);
-        auth.MapPost("/challenges/{challengeId}/resend", ResendAsync);
-        auth.MapGet("/userinfo", UserInfoAsync);
+        auth.MapPost("/login", LoginAsync)
+            .AllowAnonymous();
+        auth.MapPost("/challenges/{challengeId}/verify", VerifyAsync)
+            .AllowAnonymous();
+        auth.MapPost("/challenges/{challengeId}/resend", ResendAsync)
+            .AllowAnonymous();
+
+        // Userinfo validates the bearer token inside UserInfoService rather than
+        // through authorization middleware, so it is deliberately anonymous at
+        // the endpoint level but still requires a valid token to return data.
+        auth.MapGet("/userinfo", UserInfoAsync)
+            .AllowAnonymous();
 
         return app;
     }
