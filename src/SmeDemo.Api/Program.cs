@@ -1,18 +1,29 @@
-﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Reflection;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using SmeDemo.Api.Auth;
 using SmeDemo.Api.Configuration;
 using SmeDemo.Api.Endpoints;
 using SmeDemo.Api.Errors;
 using SmeDemo.Api.Http;
+using SmeDemo.Api.OpenApi;
 using SmeDemo.Application;
 using SmeDemo.Infrastructure;
 using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Seeding;
-using System.Text.Json;
 
 var builder = WebApplication.CreateBuilder(args);
-var options = ApiOptions.FromConfiguration(builder.Configuration);
+
+// The build-time OpenAPI generator (Microsoft.Extensions.ApiDescription.Server)
+// invokes this entry point in the Production environment with no deployment
+// configuration, then reads the document from the service container. Use inert
+// options for that run so the document is produced from endpoint metadata
+// alone; a deployed host never takes this path.
+var isBuildTimeOpenApi = Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
+var options = isBuildTimeOpenApi
+    ? ApiOptions.ForOpenApiDocumentGeneration()
+    : ApiOptions.FromConfiguration(builder.Configuration);
 
 builder.Services.AddSingleton(options);
 builder.Services.AddApplication(new ApplicationOptions(options.PublicBaseUrl));
@@ -56,7 +67,11 @@ builder.Services.AddAuthorization(authorization =>
 builder.Services.AddSingleton<IAuthorizationHandler, OrgAuthorizationHandler>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, ProblemAuthorizationResultHandler>();
 
-builder.Services.AddOpenApi();
+builder.Services.AddOpenApi(openApi =>
+{
+    openApi.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+    openApi.AddOperationTransformer<EndpointSecurityTransformer>();
+});
 
 if (options.SeedEnabled)
 {

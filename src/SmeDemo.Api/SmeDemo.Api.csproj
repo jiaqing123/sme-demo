@@ -4,6 +4,14 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>SmeDemo.Api</RootNamespace>
     <AssemblyName>SmeDemo.Api</AssemblyName>
+
+    <!--
+      The generated document is a committed artefact: CI regenerates it during
+      the build and fails on any difference, so a route or contract change
+      cannot ship without the matching openapi/v1.json update.
+    -->
+    <OpenApiDocumentsDirectory>$(MSBuildProjectDirectory)/../../openapi</OpenApiDocumentsDirectory>
+    <OpenApiGenerateDocumentsOptions>--file-name v1</OpenApiGenerateDocumentsOptions>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,6 +22,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.Extensions.ApiDescription.Server" />
   </ItemGroup>
 
 </Project>

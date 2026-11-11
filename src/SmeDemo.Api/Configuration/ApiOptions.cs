@@ -1,4 +1,4 @@
-﻿using SmeDemo.Infrastructure.Configuration;
+using SmeDemo.Infrastructure.Configuration;
 
 namespace SmeDemo.Api.Configuration;
 
@@ -82,6 +82,30 @@ public sealed record ApiOptions(
                 : TimeSpan.FromMinutes(5),
             IssuerSyncEnabled: issuerSyncEnabled);
     }
+
+    /// <summary>
+    /// Values used only while the build-time OpenAPI generator runs this entry
+    /// point (<c>dotnet build</c>): no database, key, or endpoint here is ever
+    /// contacted, because the document is produced from endpoint metadata
+    /// alone. Seed and issuer-sync workers stay off in that run.
+    /// </summary>
+    public static ApiOptions ForOpenApiDocumentGeneration() => new(
+        DatabaseUrl: "Server=openapi-generation;Database=none;User Id=none;Password=none;TrustServerCertificate=True",
+        OrgId: "sme",
+        CorsOrigin: "http://localhost:8080",
+        AuthMetadataUrl: "https://localhost:1/.well-known/openid-configuration",
+        JwtIssuer: "https://localhost:1",
+        JwtAudience: "sme-demo-api",
+        RequireHttpsMetadata: false,
+        PublicBaseUrl: "http://localhost:8082",
+        SeedEnabled: false,
+        StorageConnectionString: "UseDevelopmentStorage=true",
+        TransactionsTable: "transactions",
+        CardArtContainer: "card-art",
+        IssuerBaseUrl: "http://localhost:1",
+        IssuerApiKey: "none",
+        IssuerSyncInterval: TimeSpan.FromMinutes(5),
+        IssuerSyncEnabled: false);
 
     private static bool IsAbsoluteHttpUrl(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
