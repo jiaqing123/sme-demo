@@ -1,10 +1,14 @@
-﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using System.Collections.Concurrent;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
@@ -12,8 +16,6 @@ using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Errors;
 using SmeDemo.Application.Features.Transactions;
 using SmeDemo.Domain.Entities;
-using System.Security.Cryptography;
-using System.Text;
 
 namespace SmeDemo.Api.Tests;
 
@@ -68,6 +70,13 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
 
     public FakeBlobStore Blobs { get; } = new();
 
+    /// <summary>
+    /// Captures every formatted log message (and its template) the API emits, so
+    /// the security tests can prove no token, OTP, phone number, or password is
+    /// ever written to the log.
+    /// </summary>
+    public CapturingLoggerProvider Logs { get; } = new();
+
     public string CreateToken(
         string org = OrgId,
         DateTimeOffset? issuedAt = null,
@@ -93,9 +102,56 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         return TokenHandler.CreateToken(descriptor);
     }
 
+    /// <summary>
+    /// Builds a token with explicit claim, key, or signature overrides for the
+    /// negative authentication matrix. This is deliberately separate from
+    /// <see cref="CreateToken"/> so the happy-path helper keeps its exact
+    /// contract; pass <paramref name="unsigned"/> to emit an <c>alg=none</c>
+    /// token with no signature.
+    /// </summary>
+    public string CreateTokenWith(
+        string? issuer = null,
+        string? audience = null,
+        string? org = null,
+        DateTimeOffset? issuedAt = null,
+        DateTimeOffset? expiresAt = null,
+        SigningCredentials? signingCredentials = null,
+        bool unsigned = false)
+    {
+        var issued = issuedAt ?? DateTimeOffset.UtcNow;
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = issuer ?? Issuer,
+            Audience = audience ?? Audience,
+            IssuedAt = issued.UtcDateTime,
+            Expires = (expiresAt ?? issued.AddMinutes(30)).UtcDateTime,
+            Claims = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["sub"] = UserId.ToString(),
+                ["org"] = org ?? OrgId,
+                ["name"] = "Alex Morgan",
+                ["jti"] = Guid.NewGuid().ToString(),
+            },
+        };
+
+        if (!unsigned)
+        {
+            descriptor.SigningCredentials = signingCredentials
+                ?? new SigningCredentials(SigningKey, SecurityAlgorithms.RsaSha256);
+        }
+
+        return TokenHandler.CreateToken(descriptor);
+    }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
+        builder.ConfigureLogging(logging =>
+        {
+            logging.SetMinimumLevel(LogLevel.Trace);
+            logging.AddFilter<CapturingLoggerProvider>(null, LogLevel.Trace);
+            logging.AddProvider(Logs);
+        });
         builder.ConfigureAppConfiguration((_, configuration) =>
         {
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -293,3 +349,65 @@ public sealed class FakeBlobStore : IBlobStore
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("The API does not upload artwork at run time.");
 }
+
+/// <summary>
+/// Test-only <see cref="ILoggerProvider"/> that records formatted messages and
+/// their <c>{OriginalFormat}</c> templates in memory. The security tests scan
+/// this text for secrets; it never leaves the test process.
+/// </summary>
+public sealed class CapturingLoggerProvider : ILoggerProvider
+{
+    private readonly ConcurrentQueue<CapturedLogEntry> _entries = new();
+
+    public IReadOnlyList<CapturedLogEntry> Entries => _entries.ToArray();
+
+    /// <summary>All captured messages as one searchable text block.</summary>
+    public string Text => string.Join(
+        Environment.NewLine,
+        _entries.Select(entry =>
+            $"{entry.Category} [{entry.Level}] {entry.Message} | template: {entry.Template}"));
+
+    public ILogger CreateLogger(string categoryName) => new CapturingLogger(this, categoryName);
+
+    public void Dispose()
+    {
+    }
+
+    private void Add(CapturedLogEntry entry) => _entries.Enqueue(entry);
+
+    private sealed class CapturingLogger(CapturingLoggerProvider owner, string category) : ILogger
+    {
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            ArgumentNullException.ThrowIfNull(formatter);
+
+            var template = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values.LastOrDefault(pair => pair.Key == "{OriginalFormat}").Value as string
+                : null;
+
+            owner.Add(new CapturedLogEntry(
+                category,
+                logLevel,
+                eventId,
+                formatter(state, exception),
+                template ?? string.Empty));
+        }
+    }
+}
+
+public sealed record CapturedLogEntry(
+    string Category,
+    LogLevel Level,
+    EventId EventId,
+    string Message,
+    string Template);
