@@ -34,6 +34,7 @@ engineer can find them without knowing the section numbers in advance.
 | ADR-013 | The OpenAPI document is a committed build artefact (`openapi/v1.json`), regenerated during `dotnet build` and checked by CI; the runtime endpoint is Development-only. | Accepted | [`../development.md`](../../development.md#openapi-document); [`../../../openapi/v1.json`](../../../openapi/v1.json); [`../../../src/SmeDemo.Api/SmeDemo.Api.csproj`](../../../src/SmeDemo.Api/SmeDemo.Api.csproj) |
 | ADR-014 | This is an internal repository and is not distributed outside the company, so no open-source `LICENSE` file is added; external distribution would need a licence decision and `THIRD-PARTY-NOTICES`. | Accepted | [`../licensing.md`](../../licensing.md) §4; [`../../../README.md`](../../../README.md) |
 | ADR-015 | Accept the roughly 3 GB footprint dominated by SQL Server; do not promise the stack runs anywhere without measuring on the actual demo hardware. | Accepted | [`../requirements.md`](../../requirements.md) §5.6, §13.3 |
+| ADR-016 | Delivery is split: GitHub Actions stays the fast pull-request gate, and Azure Pipelines becomes the formal build and Test/UAT/Prod release path. Deployment stages ship as failing placeholders until the hosting model and Azure resources are chosen; images are built once and promoted by tag. | Accepted | [`../../azure-pipelines.md`](../../azure-pipelines.md); [`../../development.md`](../../development.md#continuous-integration); [`../../azure-pipelines.yml`](../../../azure-pipelines.yml) |
 
 ## Revisiting a decision
 

@@ -1,0 +1,490 @@
+# Azure Pipelines equivalent of .github/workflows/ci.yml.
+#
+# The Build stage is the same set of gates as the GitHub Actions workflow:
+# .NET build/tests, formatting, OpenAPI artefact, migrations/SQL, removed-package
+# guard, vulnerability scan, secret scan, web build/tests, Compose validation,
+# container image builds, and the Compose smoke test.
+#
+# Test/UAT/Prod are deployment stages. They are skipped by default because the
+# Azure resources and service connections do not exist in this repository. Set
+# the queue-time parameters after the targets are configured:
+#
+#   publishImages     - push the six images to Azure Container Registry
+#   enableDeployments - run the Test/UAT/Prod stages
+#
+# Required Azure DevOps configuration:
+#   * Environments: sme-demo-test, sme-demo-uat, sme-demo-prod.
+#     Add an approval/check to sme-demo-uat and sme-demo-prod.
+#   * A Docker registry service connection to the ACR; set acrServiceConnection.
+#   * An Azure Resource Manager service connection; set azureServiceConnection.
+#   * Pipeline variables (or a variable group) for acrLoginServer,
+#     acrServiceConnection, azureServiceConnection, and the per-environment
+#     resource names used by the real deployment steps.
+#
+# The deployment jobs contain deliberately failing placeholders until the real
+# migration/rollout commands are supplied. A green deployment stage that does
+# nothing would be worse than a red one.
+
+trigger:
+  branches:
+    include:
+      - main
+
+pr:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: publishImages
+    displayName: Push images to Azure Container Registry
+    type: boolean
+    default: false
+  - name: enableDeployments
+    displayName: Enable Test/UAT/Prod deployment stages
+    type: boolean
+    default: false
+
+variables:
+  dotnetVersion: "10.0.x"
+  nodeVersion: "22.x"
+  # One immutable tag per build; the same tag is promoted through every
+  # environment. $(Build.BuildId) is also pushed for readability in ACR.
+  imageTag: $(Build.SourceVersion)
+  acrLoginServer: ""
+  acrServiceConnection: ""
+  azureServiceConnection: ""
+  testResourceGroup: ""
+  uatResourceGroup: ""
+  prodResourceGroup: ""
+
+stages:
+  - stage: Build
+    displayName: Build and verify
+    jobs:
+      - job: DotNet
+        displayName: .NET build, tests and gates
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 30
+        steps:
+          - checkout: self
+
+          - task: UseDotNet@2
+            displayName: Set up .NET
+            inputs:
+              packageType: sdk
+              version: $(dotnetVersion)
+
+          - script: dotnet tool restore
+            displayName: Restore local tools
+
+          - script: dotnet build SmeDemo.slnx --configuration Release
+            displayName: Build
+
+          - script: >-
+              dotnet test SmeDemo.slnx --configuration Release --no-build
+              --logger trx
+              --results-directory "$(Agent.TempDirectory)/TestResults"
+            displayName: Test
+
+          - task: PublishTestResults@2
+            displayName: Publish test results
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFormat: VSTest
+              testResultsFiles: "$(Agent.TempDirectory)/TestResults/*.trx"
+              failTaskOnFailedTests: true
+
+          - script: dotnet format SmeDemo.slnx --verify-no-changes
+            displayName: Verify formatting
+
+          # The Release build runs the API project's build-time OpenAPI
+          # generator, which rewrites openapi/v1.json. A committed document must
+          # not be stale.
+          - bash: |
+              set -euo pipefail
+              test -f openapi/v1.json
+              if ! git diff --exit-code -- openapi/; then
+                echo "##vso[task.logissue type=error]openapi/v1.json is stale. Rebuild with 'dotnet build src/SmeDemo.Api/SmeDemo.Api.csproj --configuration Release' and commit the regenerated file."
+                exit 1
+              fi
+            displayName: Verify the generated OpenAPI document is committed
+
+          - script: >-
+              dotnet tool run dotnet-ef migrations has-pending-model-changes
+              --project src/SmeDemo.Infrastructure
+              --startup-project src/SmeDemo.Infrastructure
+              --configuration Release --no-build
+            displayName: Check the API model for pending migrations
+
+          - script: >-
+              dotnet tool run dotnet-ef migrations has-pending-model-changes
+              --project src/SmeDemo.Auth
+              --startup-project src/SmeDemo.Auth
+              --configuration Release --no-build
+            displayName: Check the auth model for pending migrations
+
+          - bash: |
+              set -euo pipefail
+              dotnet tool run dotnet-ef migrations script --idempotent \
+                --project src/SmeDemo.Infrastructure \
+                --startup-project src/SmeDemo.Infrastructure \
+                --configuration Release --no-build \
+                --output "$(Agent.TempDirectory)/sme_api.sql"
+              diff -u db/migrations/api/sme_api.sql "$(Agent.TempDirectory)/sme_api.sql"
+
+              dotnet tool run dotnet-ef migrations script --idempotent \
+                --project src/SmeDemo.Auth \
+                --startup-project src/SmeDemo.Auth \
+                --configuration Release --no-build \
+                --output "$(Agent.TempDirectory)/sme_auth.sql"
+              diff -u db/migrations/auth/sme_auth.sql "$(Agent.TempDirectory)/sme_auth.sql"
+            displayName: Check generated SQL matches the model
+
+          - bash: |
+              set -euo pipefail
+              if grep -rE '<Package(Reference|Version) Include="(MediatR|AutoMapper)"' \
+                  --include='*.csproj' --include='*.props' .; then
+                echo "##vso[task.logissue type=error]MediatR/AutoMapper must not be reintroduced; see docs/licensing.md §3."
+                exit 1
+              fi
+            displayName: Check removed packages stay removed
+
+          - script: python3 tools/smoke/check-vulnerabilities.py
+            displayName: Scan dependencies for known vulnerabilities
+
+          # Pinned and checksum-verified; --no-git scans the shallow checkout's
+          # working tree rather than the git history.
+          - bash: |
+              set -euo pipefail
+              archive="$(Agent.TempDirectory)/gitleaks.tar.gz"
+              curl -fsSL --retry 3 -o "$archive" \
+                "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+              echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  ${archive}" \
+                | sha256sum --check --strict
+              tar -xzf "$archive" -C "$(Agent.TempDirectory)" gitleaks
+              "$(Agent.TempDirectory)/gitleaks" detect --source . --no-git --redact \
+                --config .gitleaks.toml --exit-code 1
+            displayName: Scan for secrets
+
+      - job: Web
+        displayName: Web build and tests
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 15
+        steps:
+          - checkout: self
+
+          - task: UseNode@1
+            displayName: Set up Node
+            inputs:
+              version: $(nodeVersion)
+
+          - script: npm ci
+            displayName: Install
+            workingDirectory: web
+
+          - script: npm run build
+            displayName: Type-check and build
+            workingDirectory: web
+
+          - script: npm test
+            displayName: Test
+            workingDirectory: web
+
+      - job: ComposeValidation
+        displayName: Compose validation
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 5
+        steps:
+          - checkout: self
+
+          - script: cp .env.example .env
+            displayName: Prepare compose environment
+
+          - script: docker compose config -q
+            displayName: Validate compose file
+
+      - job: Images
+        displayName: Build container images
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 45
+        steps:
+          - checkout: self
+
+          # With publishImages=false this only proves the Dockerfiles on the
+          # agent. With publishImages=true the same build is pushed to ACR.
+          - ${{ if eq(parameters.publishImages, true) }}:
+              - task: Docker@2
+                displayName: Build and push api
+                inputs:
+                  command: buildAndPush
+                  containerRegistry: $(acrServiceConnection)
+                  repository: sme-demo/api
+                  Dockerfile: src/SmeDemo.Api/Dockerfile
+                  buildContext: .
+                  tags: |
+                    $(imageTag)
+                    $(Build.BuildId)
+
+              - task: Docker@2
+                displayName: Build and push auth
+                inputs:
+                  command: buildAndPush
+                  containerRegistry: $(acrServiceConnection)
+                  repository: sme-demo/auth
+                  Dockerfile: src/SmeDemo.Auth/Dockerfile
+                  buildContext: .
+                  tags: |
+                    $(imageTag)
+                    $(Build.BuildId)
+
+              - task: Docker@2
+                displayName: Build and push web
+                inputs:
+                  command: buildAndPush
+                  containerRegistry: $(acrServiceConnection)
+                  repository: sme-demo/web
+                  Dockerfile: web/Dockerfile
+                  buildContext: .
+                  tags: |
+                    $(imageTag)
+                    $(Build.BuildId)
+
+              - task: Docker@2
+                displayName: Build and push sms-mock
+                inputs:
+                  command: buildAndPush
+                  containerRegistry: $(acrServiceConnection)
+                  repository: sme-demo/sms-mock
+                  Dockerfile: tools/SmsMock/Dockerfile
+                  buildContext: .
+                  tags: |
+                    $(imageTag)
+                    $(Build.BuildId)
+
+              - task: Docker@2
+                displayName: Build and push issuer-mock
+                inputs:
+                  command: buildAndPush
+                  containerRegistry: $(acrServiceConnection)
+                  repository: sme-demo/issuer-mock
+                  Dockerfile: tools/IssuerMock/Dockerfile
+                  buildContext: .
+                  tags: |
+                    $(imageTag)
+                    $(Build.BuildId)
+
+              - task: Docker@2
+                displayName: Build and push migrator
+                inputs:
+                  command: buildAndPush
+                  containerRegistry: $(acrServiceConnection)
+                  repository: sme-demo/migrator
+                  Dockerfile: tools/Migrator/Dockerfile
+                  buildContext: .
+                  tags: |
+                    $(imageTag)
+                    $(Build.BuildId)
+          - ${{ else }}:
+              - bash: |
+                  set -euo pipefail
+                  docker build --file src/SmeDemo.Api/Dockerfile \
+                    --tag "sme-demo-api:$(imageTag)" .
+                  docker build --file src/SmeDemo.Auth/Dockerfile \
+                    --tag "sme-demo-auth:$(imageTag)" .
+                  docker build --file web/Dockerfile \
+                    --tag "sme-demo-web:$(imageTag)" .
+                  docker build --file tools/SmsMock/Dockerfile \
+                    --tag "sme-demo-sms-mock:$(imageTag)" .
+                  docker build --file tools/IssuerMock/Dockerfile \
+                    --tag "sme-demo-issuer-mock:$(imageTag)" .
+                  docker build --file tools/Migrator/Dockerfile \
+                    --tag "sme-demo-migrator:$(imageTag)" .
+                displayName: Build local images
+
+      - job: ComposeSmoke
+        displayName: Compose smoke test
+        pool:
+          vmImage: ubuntu-latest
+        timeoutInMinutes: 45
+        steps:
+          - checkout: self
+
+          - script: cp .env.example .env
+            displayName: Prepare compose environment
+
+          - script: >-
+              docker compose up -d --build
+              mssql azurite db-migrator db-migrator-auth db-grants auth api
+            displayName: Start the stack
+
+          - bash: |
+              set -euo pipefail
+
+              wait_for_health() {
+                local service="$1"
+                local status=""
+                for _ in $(seq 1 90); do
+                  status="$(docker inspect --format \
+                    '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                    "$(docker compose ps -q "$service")" 2>/dev/null || true)"
+                  if [ "$status" = "healthy" ]; then
+                    echo "$service is healthy"
+                    return 0
+                  fi
+                  sleep 2
+                done
+                echo "##vso[task.logissue type=error]$service did not become healthy (last status: ${status:-unknown})"
+                return 1
+              }
+
+              wait_for_exit() {
+                local service="$1"
+                local status=""
+                for _ in $(seq 1 90); do
+                  status="$(docker inspect --format '{{.State.Status}}:{{.State.ExitCode}}' \
+                    "$(docker compose ps -aq "$service")" 2>/dev/null || true)"
+                  if [ "$status" = "exited:0" ]; then
+                    echo "$service exited 0"
+                    return 0
+                  fi
+                  sleep 2
+                done
+                echo "##vso[task.logissue type=error]$service did not exit 0 (last status: ${status:-unknown})"
+                return 1
+              }
+
+              wait_for_health auth
+              wait_for_health api
+              wait_for_exit db-migrator
+              wait_for_exit db-migrator-auth
+              wait_for_exit db-grants
+            displayName: Wait for migrations and health
+
+          - script: bash tools/smoke/compose-smoke.sh
+            displayName: Run the compose smoke test
+
+          # Diagnose before the teardown step removes the containers.
+          - bash: |
+              docker compose ps -a
+              docker compose logs --no-color
+            displayName: Dump compose state on failure
+            condition: failed()
+
+          - script: docker compose down -v --remove-orphans
+            displayName: Tear down
+            condition: always()
+
+  # The deployment stages are included only when the queue-time parameter is
+  # true. Compile-time inclusion avoids relying on runtime boolean-parameter
+  # rendering in condition expressions.
+  - ${{ if eq(parameters.enableDeployments, true) }}:
+    - stage: DeployTest
+      displayName: Deploy Test
+      dependsOn: Build
+      jobs:
+        - deployment: DeployTest
+          displayName: Deploy to Test
+          environment: sme-demo-test
+          pool:
+            vmImage: ubuntu-latest
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - checkout: self
+
+                  # Replace this placeholder with the real test deployment:
+                  # migrate the database, roll out the image digest, then run
+                  # environment-specific smoke checks.
+                  - bash: |
+                      set -euo pipefail
+                      : "${ACR_LOGIN_SERVER:?Set the acrLoginServer pipeline variable.}"
+                      : "${AZURE_SERVICE_CONNECTION:?Set the azureServiceConnection pipeline variable.}"
+                      : "${RESOURCE_GROUP:?Set the testResourceGroup pipeline variable.}"
+                      echo "Deploy target: test"
+                      echo "Resource group: ${RESOURCE_GROUP}"
+                      echo "Image: ${ACR_LOGIN_SERVER}/sme-demo/api:${IMAGE_TAG}"
+                      echo "##vso[task.logissue type=error]The test deployment placeholder is still in place. Configure the test resources and replace these steps."
+                      exit 1
+                    displayName: "Placeholder: deploy to Test"
+                    env:
+                      ACR_LOGIN_SERVER: $(acrLoginServer)
+                      AZURE_SERVICE_CONNECTION: $(azureServiceConnection)
+                      RESOURCE_GROUP: $(testResourceGroup)
+                      IMAGE_TAG: $(imageTag)
+
+  - ${{ if eq(parameters.enableDeployments, true) }}:
+    - stage: DeployUat
+      displayName: Deploy UAT
+      dependsOn: DeployTest
+      jobs:
+        - deployment: DeployUat
+          displayName: Deploy to UAT
+          environment: sme-demo-uat
+          pool:
+            vmImage: ubuntu-latest
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - checkout: self
+
+                  # Same contract as Test. The sme-demo-uat environment should
+                  # carry the UAT approval/check in Azure DevOps.
+                  - bash: |
+                      set -euo pipefail
+                      : "${ACR_LOGIN_SERVER:?Set the acrLoginServer pipeline variable.}"
+                      : "${AZURE_SERVICE_CONNECTION:?Set the azureServiceConnection pipeline variable.}"
+                      : "${RESOURCE_GROUP:?Set the uatResourceGroup pipeline variable.}"
+                      echo "Deploy target: uat"
+                      echo "Resource group: ${RESOURCE_GROUP}"
+                      echo "Image: ${ACR_LOGIN_SERVER}/sme-demo/api:${IMAGE_TAG}"
+                      echo "##vso[task.logissue type=error]The UAT deployment placeholder is still in place. Configure the UAT resources and replace these steps."
+                      exit 1
+                    displayName: "Placeholder: deploy to UAT"
+                    env:
+                      ACR_LOGIN_SERVER: $(acrLoginServer)
+                      AZURE_SERVICE_CONNECTION: $(azureServiceConnection)
+                      RESOURCE_GROUP: $(uatResourceGroup)
+                      IMAGE_TAG: $(imageTag)
+
+  - ${{ if eq(parameters.enableDeployments, true) }}:
+    - stage: DeployProd
+      displayName: Deploy Production
+      dependsOn: DeployUat
+      jobs:
+        - deployment: DeployProd
+          displayName: Deploy to Production
+          environment: sme-demo-prod
+          pool:
+            vmImage: ubuntu-latest
+          strategy:
+            runOnce:
+              deploy:
+                steps:
+                  - checkout: self
+
+                  # Production must be gated by the sme-demo-prod environment's
+                  # approval/check. The deployment itself is intentionally
+                  # unimplemented until the hosting model is chosen.
+                  - bash: |
+                      set -euo pipefail
+                      : "${ACR_LOGIN_SERVER:?Set the acrLoginServer pipeline variable.}"
+                      : "${AZURE_SERVICE_CONNECTION:?Set the azureServiceConnection pipeline variable.}"
+                      : "${RESOURCE_GROUP:?Set the prodResourceGroup pipeline variable.}"
+                      echo "Deploy target: prod"
+                      echo "Resource group: ${RESOURCE_GROUP}"
+                      echo "Image: ${ACR_LOGIN_SERVER}/sme-demo/api:${IMAGE_TAG}"
+                      echo "##vso[task.logissue type=error]The production deployment placeholder is still in place. Configure the production resources, approvals, and replace these steps."
+                      exit 1
+                    displayName: "Placeholder: deploy to Production"
+                    env:
+                      ACR_LOGIN_SERVER: $(acrLoginServer)
+                      AZURE_SERVICE_CONNECTION: $(azureServiceConnection)
+                      RESOURCE_GROUP: $(prodResourceGroup)
+                      IMAGE_TAG: $(imageTag)

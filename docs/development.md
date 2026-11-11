@@ -604,6 +604,11 @@ The `dotnet`, `web`, and `compose` jobs need no SQL Server, Azurite, or SMS
 container: the API tests replace the repositories and storage with fakes, the
 auth tests use EF InMemory, and the frontend tests run in jsdom.
 
+The Azure Pipelines equivalent — the same Build gates plus the Test, UAT, and
+Production deployment stages — is described in
+[`azure-pipelines.md`](azure-pipelines.md). GitHub Actions stays the fast
+pull-request loop; Azure Pipelines is the formal release path.
+
 ### Format gate
 
 CI runs `dotnet format SmeDemo.slnx --verify-no-changes` on Linux. The command may

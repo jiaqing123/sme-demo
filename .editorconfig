@@ -2,7 +2,7 @@ root = true
 
 # The repository is edited on Windows and built on Linux. Sources are UTF-8;
 # both the BOM and BOM-less encodings already present are accepted (an explicit
-# `charset` would rewrite 36 existing files for no behavioural gain). Git
+# `charset` would rewrite dozens of existing files for no behavioural gain). Git
 # normalises line endings to LF (.gitattributes), and the formatter gate checks
 # the same rule.
 [*]

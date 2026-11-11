@@ -139,6 +139,7 @@ TypeScript check and the production build. See
 ```
 docs/requirements.md                System requirements and architecture
 docs/development.md                 How to build, migrate, run auth, and reset
+docs/azure-pipelines.md             Azure Pipelines gates and Test/UAT/Prod promotion
 docs/reference/                     baseline rules, Definition of Done, ADR index, cookbook, versioning
 docs/native-di-dispatch.md          Team standard for command/query handlers
 docs/licensing.md                   Third-party licensing notes for management review
