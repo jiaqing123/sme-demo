@@ -9,7 +9,8 @@ A demo system for small and medium-sized businesses, built as three layers:
 ## Stack
 
 - **Front end:** React + TypeScript (demo UI), English, mobile-first.
-- **API:** ASP.NET Core, three-tier with MediatR and AutoMapper.
+- **API:** ASP.NET Core, three-tier with native DI command/query handlers and
+  hand-written mapping.
 - **Auth:** a separate ASP.NET Core JWT issuer service.
 - **Data:** SQL Server, plus Azure Table and Blob Storage via Azurite — all in
   Docker, offline.
@@ -19,7 +20,8 @@ A demo system for small and medium-sized businesses, built as three layers:
 The auth issuer, the resource API, and the web UI are implemented. What exists
 today:
 
-- The solution, central package management, and the licensing pins.
+- The solution, central package management, and the dependency policy (no
+  mediator or object-mapping library).
 - The EF Core model for cards and issuer sync state.
 - Versioned migrations, generated into committed, idempotent SQL scripts for
   both `sme_api` and `sme_auth`.
@@ -99,6 +101,7 @@ TypeScript check and the production build. See
 ```
 docs/requirements.md                System requirements and architecture
 docs/development.md                 How to build, migrate, run auth, and reset
+docs/native-di-dispatch.md          Team standard for command/query handlers
 docs/licensing.md                   Third-party licensing notes for management review
 docs/declarative-schema-workshop.md 45-minute walkthrough of state-based schema tooling
 src/SmeDemo.Api                     resource API endpoints and composition root

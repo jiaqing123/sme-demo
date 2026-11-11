@@ -16,7 +16,7 @@ SmeDemo.slnx                        solution (XML format, .NET 10 SDK)
 Directory.Build.props               shared build settings
 Directory.Packages.props            all package versions, pinning included
 src/SmeDemo.Api                    resource API endpoints, auth wiring, composition root
-src/SmeDemo.Application            MediatR handlers, DTOs, validators, port interfaces
+src/SmeDemo.Application            command/query handlers, DTOs, validators, port interfaces
 src/SmeDemo.Domain                 entities and invariants
 src/SmeDemo.Infrastructure         EF Core model, migrations, Table/Blob adapters, seeders
 src/SmeDemo.Auth                   independent JWT issuer (own database and keys)
@@ -35,7 +35,7 @@ tests/SmeDemo.Auth.Tests           challenge-rule and token-claim tests
 tests/SmeDemo.Infrastructure.Tests IssuerSyncService tests against fake ports/InMemory EF
 docker-compose.yml                 SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
 docker-compose.dcproj              Visual Studio Compose project (F5 debugging of auth and API)
-docs/                              requirements, licensing, workshop
+docs/                              requirements, licensing, native dispatch standard, workshop
 ```
 
 ## First run

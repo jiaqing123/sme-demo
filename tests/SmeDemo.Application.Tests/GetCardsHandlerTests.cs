@@ -1,6 +1,5 @@
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SmeDemo.Application.Features.Cards;
-using SmeDemo.Application.Features.Transactions;
 
 namespace SmeDemo.Application.Tests;
 
@@ -17,9 +16,9 @@ public sealed class GetCardsHandlerTests
         repository.Cards.AddRange([third, first, second]);
         repository.Cards.Add(TestData.CreateCard(Guid.NewGuid(), TestData.OtherUserId, 0, "9999"));
 
-        var handler = new GetCardsHandler(repository, TestData.CreateMapper(), TestData.Options());
+        var handler = new GetCardsHandler(repository, TestData.Options());
 
-        var response = await handler.Handle(new GetCardsQuery(TestData.UserId), CancellationToken.None);
+        var response = await handler.HandleAsync(new GetCardsQuery(TestData.UserId), CancellationToken.None);
 
         CollectionAssert.AreEqual(
             new[] { first.Id, second.Id, third.Id },

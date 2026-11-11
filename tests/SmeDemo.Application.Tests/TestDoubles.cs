@@ -1,6 +1,4 @@
-using AutoMapper;
 using SmeDemo.Application.Abstractions;
-using SmeDemo.Application.Features.Cards;
 using SmeDemo.Application.Features.Transactions;
 using SmeDemo.Domain.Entities;
 
@@ -94,17 +92,6 @@ internal static class TestData
             occurredAt,
             occurredAt.AddHours(2),
             "{}");
-    }
-
-    public static IMapper CreateMapper()
-    {
-        var configuration = new MapperConfiguration(config =>
-        {
-            config.AddProfile<CardMappingProfile>();
-            config.AddProfile<TransactionMappingProfile>();
-        });
-
-        return configuration.CreateMapper();
     }
 
     public static ApplicationOptions Options() => new("http://localhost:8082");

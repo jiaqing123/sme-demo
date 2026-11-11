@@ -1,8 +1,11 @@
 # SME Demo — System Requirements & Architecture
 
-- **Status:** Draft v0.3
+- **Status:** Draft v0.4
 - **Owner:** Architecture
-- **Last updated:** 2026-11-06
+- **Last updated:** 2026-11-11
+- **Changes in v0.4:** MediatR and AutoMapper removed. Commands and queries
+  dispatch through interfaces owned by `Application`, and projections are
+  hand-written (§13.2).
 - **Changes in v0.3:** the transaction feed moved to Azure Table Storage via
   Azurite; Cosmos DB deferred behind the same port; licensing notes extracted
   to [`licensing.md`](licensing.md).
@@ -112,9 +115,9 @@ Compose network and never holds a signing key.
 |---------|--------|
 | Runtime | .NET 10 (LTS), C# 14 |
 | API host | ASP.NET Core minimal APIs |
-| Endpoint orchestration | MediatR (community/free version pinned — see §13.2) |
-| Object mapping | AutoMapper (free version pinned — see §13.2) |
-| Validation | FluentValidation (Apache-2.0, current stable) + a MediatR pipeline behaviour |
+| Endpoint orchestration | Native DI: `IQueryHandler<,>` / `ICommandHandler<,>` contracts declared in `Application` (§13.2) |
+| Object mapping | Hand-written projections at the call site (no mapping library) |
+| Validation | FluentValidation (Apache-2.0, current stable) + a validation decorator |
 | Persistence (relational) | EF Core 10 + `Microsoft.EntityFrameworkCore.SqlServer` |
 | Persistence (transaction feed) | `Azure.Data.Tables` against Azurite |
 | Blob storage | `Azure.Storage.Blobs` |
@@ -130,10 +133,11 @@ Compose network and never holds a signing key.
 **Preference rule.** Microsoft packages come first for runtime, hosting,
 authentication, data access, and outbound HTTP. A well-maintained OSS library is
 acceptable when it is licence-clean and has no real first-party equivalent:
-FluentValidation qualifies (Apache-2.0), as do MediatR and AutoMapper in their
-last permissively-licensed versions (§13.2). Packages that duplicate a
-first-party capability without adding much stay out: Serilog (built-in logging),
-Swashbuckle (built-in OpenAPI), Dapper (EF Core), Mapster (AutoMapper),
+FluentValidation qualifies (Apache-2.0). Mediator and object-mapping libraries
+are out by policy: the contracts are a handful of interfaces in `Application`,
+and a flat projection is clearer written by hand (§13.2). Packages that
+duplicate a first-party capability without adding much stay out: Serilog
+(built-in logging), Swashbuckle (built-in OpenAPI), Dapper (EF Core),
 MassTransit (not needed at this size).
 
 ### 5.5 Layering rules
@@ -143,7 +147,7 @@ Three tiers plus a domain project, all in one solution:
 ```
 src/
   SmeDemo.Api/              presentation: endpoints, auth wiring, composition root
-  SmeDemo.Application/      use cases: MediatR handlers, DTOs, profiles, port interfaces
+  SmeDemo.Application/      use cases: native command/query handlers, DTOs, validators, port interfaces
   SmeDemo.Domain/           entities, value objects, domain errors
   SmeDemo.Infrastructure/   adapters: EF Core, Table Storage, Blob, issuer HTTP client
   SmeDemo.Auth/             independent JWT issuer service, own project and Dockerfile
@@ -156,23 +160,23 @@ The rules that make "thin endpoints" mean something:
 
 | Rule | Enforcement |
 |------|-------------|
-| An endpoint may only bind input, call `ISender.Send`, and map the result to HTTP. | Code review; endpoints inject application ports, never storage clients. |
+| An endpoint may only bind input, call the injected handler, and map the result to HTTP. | Code review; endpoints inject application ports, never storage clients. |
 | No `DbContext`, `TableClient`, `BlobClient`, or `HttpClient` in `Api` endpoint files. | Only `Program.cs` and the `AddInfrastructure` extension may reference them; everything else resolves interfaces declared in `Application`. |
 | No business rules in handlers that belong to entities. | Domain project owns invariants; handlers orchestrate. |
 | Every third-party dependency is behind an interface declared in `Application`. | Adapters live in `Infrastructure` and are registered in the composition root. |
-| Cross-cutting concerns are pipeline behaviours, not repeated code. | Logging, validation, and timing behaviours in `Application`. |
+| Cross-cutting concerns are decorators, not repeated code. | Validation decorators live in `Application` and are wired explicitly in `AddApplication`. |
 
 **Where validation lives.** Request shape — required fields, formats, ranges,
 page sizes, 6-digit OTP codes — is enforced by FluentValidation validators in
-`Application`, run by a pipeline behaviour before the handler. Business
+`Application`, run by a validation decorator before the handler. Business
 invariants — a card belongs to the caller, an amount is positive, a status
 transition is legal — stay in `Domain`. Validators never touch the database: a
 check that needs a lookup is a business decision, and belongs in the handler
 where it can also return the right error code.
 
-Typical request path: endpoint → `ISender.Send(GetCardTransactionsQuery)` →
-validation behaviour → handler → `ITransactionStore` / `ICardRepository` →
-DTO mapped by AutoMapper → `Results.Ok` or a `ProblemDetails` result.
+Typical request path: endpoint → injected `IQueryHandler<,>` → validation
+decorator → handler → `ITransactionStore` / `ICardRepository` → hand-written
+`TransactionDto` projection → `Results.Ok` or a `ProblemDetails` result.
 
 ### 5.6 Container and resource footprint
 
@@ -993,18 +997,37 @@ distribution, elastic throughput, rich queries) that this demo never exercises.
 It is deferred, not rejected: `ITransactionStore` is the seam, and §8.6 lists
 the requirements that would justify adding it.
 
-### 13.2 MediatR and AutoMapper are no longer free for every organisation
+### 13.2 MediatR and AutoMapper were removed
 
-Both moved to a dual RPL-1.5 / commercial model under Lucky Penny Software.
-MediatR 13+ and AutoMapper 15+ require either a commercial licence or the free
-Community edition, which is limited to organisations under US$5M gross annual
-revenue (and, for MediatR, under US$10M in outside capital) and requires
+Both libraries moved to a dual RPL-1.5 / commercial model under Lucky Penny
+Software. MediatR 13+ and AutoMapper 15+ require either a commercial licence or
+the free Community edition, which is limited to organisations under US$5M gross
+annual revenue (and, for MediatR, under US$10M in outside capital) and requires
 registering a licence key.
 
-For a demo, the cheapest and least risky option is to pin the last
-permissively-licensed versions (MediatR 12.x, AutoMapper 14.x) and record that
-pin in `Directory.Packages.props`. The reasoning, the exact licence texts, and
-what management needs to sign off are in [`licensing.md`](licensing.md).
+We first pinned the last permissively-licensed versions (MediatR 12.5.0,
+AutoMapper 14.0.0) and recorded the pin. That pin is now withdrawn: a package
+that cannot take security fixes without a licence change is a standing risk, and
+the pinned AutoMapper carried an unfixed denial-of-service advisory
+(CVE-2026-32933). The replacement is deliberately boring:
+
+- **Dispatch** — `ICommand<TResult>`, `IQuery<TResult>`,
+  `ICommandHandler<,>`, `IQueryHandler<,>`, and a `Unit` result live in
+  `Application/Abstractions/Messaging.cs`. Handlers are plain classes
+  registered one by one in `AddApplication`; endpoints inject the handler they
+  call. There is no assembly scan, no reflection, and no third-party mediator.
+- **Cross-cutting concerns** — the validation decorator
+  (`Application/Decorators/ValidationQueryHandler.cs`) wraps the handler at
+  registration time. It is wired explicitly with a factory, so the DI container
+  needs no decorator package.
+- **Mapping** — each projection is written at its call site with an object
+  initializer or constructor call. There are four flat projections in the
+  application; a configuration-based mapper does not pay for itself.
+
+CI fails if a `MediatR` or `AutoMapper` package reference comes back. The
+working rules for new code are in
+[`native-di-dispatch.md`](native-di-dispatch.md); the decision record,
+including the licence reasoning, is [`licensing.md`](licensing.md) §3.
 
 FluentValidation is Apache-2.0 and unaffected by any of this; it needs no
 licensing decision.
@@ -1030,8 +1053,9 @@ DDL). Everything else is defence in depth.
 
 ## 14. Open questions
 
-1. **Licensing:** confirm the pinning approach in `licensing.md` with management.
-   Default in this document: pin the permissive versions, no licence key.
+1. **Licensing:** the MediatR/AutoMapper risk is closed by removing both
+   libraries (see `licensing.md` §3); the remaining third-party choices are
+   FluentValidation and the Azure/Microsoft packages.
 2. **Cosmos DB:** does anything else in the roadmap need it? If not, the port
    stays unused and that is the correct outcome.
 3. **Real IdP:** is Auth0, Entra, or Cognito expected later? If so, `auth` will

@@ -1,7 +1,7 @@
 using System.Security.Claims;
-using MediatR;
 using SmeDemo.Api.Auth;
 using SmeDemo.Api.Contracts;
+using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Contracts;
 using SmeDemo.Application.Features.Cards;
 using SmeDemo.Application.Features.Me;
@@ -26,12 +26,14 @@ public static class ResourceEndpoints
         return app;
     }
 
+    // Endpoints inject the handler they call. The call graph is visible in the
+    // constructor-free signature and F12 lands on the handler.
     private static async Task<IResult> GetMeAsync(
         ClaimsPrincipal user,
-        ISender sender,
+        IQueryHandler<GetMeQuery, MeResponse> handler,
         CancellationToken cancellationToken)
     {
-        var response = await sender.Send(
+        var response = await handler.HandleAsync(
             new GetMeQuery(UserClaims.GetId(user), UserClaims.GetOrg(user), UserClaims.GetName(user)),
             cancellationToken);
 
@@ -40,10 +42,10 @@ public static class ResourceEndpoints
 
     private static async Task<IResult> GetCardsAsync(
         ClaimsPrincipal user,
-        ISender sender,
+        IQueryHandler<GetCardsQuery, CardListResponse> handler,
         CancellationToken cancellationToken)
     {
-        var response = await sender.Send(
+        var response = await handler.HandleAsync(
             new GetCardsQuery(UserClaims.GetUserId(user)),
             cancellationToken);
 
@@ -55,10 +57,10 @@ public static class ResourceEndpoints
         int? limit,
         string? cursor,
         ClaimsPrincipal user,
-        ISender sender,
+        IQueryHandler<GetTransactionsQuery, TransactionListResponse> handler,
         CancellationToken cancellationToken)
     {
-        var response = await sender.Send(
+        var response = await handler.HandleAsync(
             new GetTransactionsQuery(UserClaims.GetUserId(user), cardId, cursor, limit),
             cancellationToken);
 
@@ -68,11 +70,11 @@ public static class ResourceEndpoints
     private static async Task<IResult> GetCardArtAsync(
         Guid cardId,
         ClaimsPrincipal user,
-        ISender sender,
+        IQueryHandler<GetCardArtQuery, CardArtResult> handler,
         HttpResponse response,
         CancellationToken cancellationToken)
     {
-        var artwork = await sender.Send(
+        var artwork = await handler.HandleAsync(
             new GetCardArtQuery(UserClaims.GetUserId(user), cardId),
             cancellationToken);
 

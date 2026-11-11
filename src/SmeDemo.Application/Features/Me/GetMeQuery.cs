@@ -1,16 +1,16 @@
-using MediatR;
+using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Contracts;
 
 namespace SmeDemo.Application.Features.Me;
 
-public sealed record GetMeQuery(string Id, string Org, string Name) : IRequest<MeResponse>;
+public sealed record GetMeQuery(string Id, string Org, string Name) : IQuery<MeResponse>;
 
-public sealed class GetMeHandler : IRequestHandler<GetMeQuery, MeResponse>
+public sealed class GetMeHandler : IQueryHandler<GetMeQuery, MeResponse>
 {
-    public Task<MeResponse> Handle(GetMeQuery request, CancellationToken cancellationToken)
+    public Task<MeResponse> HandleAsync(GetMeQuery query, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(query);
 
-        return Task.FromResult(new MeResponse(request.Id, request.Org, request.Name));
+        return Task.FromResult(new MeResponse(query.Id, query.Org, query.Name));
     }
 }

@@ -4,17 +4,11 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <!--
-    Licensing-pinned. Do not raise these versions without reading
-    docs/licensing.md and re-checking the licence terms:
-      MediatR 12.5.0      last Apache-2.0 release
-      AutoMapper 14.0.0   last MIT release
-    MediatR 13+ and AutoMapper 15+ are RPL-1.5 or commercial.
+    No mediator or object-mapping package is listed here. Commands and queries
+    are dispatched through the interfaces in
+    src/SmeDemo.Application/Abstractions/Messaging.cs, and projections are
+    written by hand. See docs/licensing.md §3 before adding one.
   -->
-  <ItemGroup Label="Licensing-pinned">
-    <PackageVersion Include="MediatR" Version="12.5.0" />
-    <PackageVersion Include="AutoMapper" Version="14.0.0" />
-  </ItemGroup>
-
   <ItemGroup Label="Data access">
     <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.14" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.14" />

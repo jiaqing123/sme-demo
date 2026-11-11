@@ -1,39 +1,46 @@
 using System.Text;
 using FluentValidation;
-using MediatR;
+using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Errors;
 
-namespace SmeDemo.Application.Behaviors;
+namespace SmeDemo.Application.Decorators;
 
 /// <summary>
-/// Runs every registered FluentValidation validator before the handler. A
-/// failure becomes the API's VALIDATION_ERROR envelope; validators never touch a
-/// database (requirements §5.5).
+/// Runs every registered FluentValidation validator before the decorated query
+/// handler. A failure becomes the API's VALIDATION_ERROR envelope; validators
+/// never touch a database (requirements §5.5).
+///
+/// This is the native replacement for MediatR's IPipelineBehavior: the
+/// composition root wraps the handler that needs validation, and handlers
+/// themselves never see a validator.
 /// </summary>
-public sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<TRequest, TResponse>
-    where TRequest : notnull
+public sealed class ValidationQueryHandler<TQuery, TResult> : IQueryHandler<TQuery, TResult>
+    where TQuery : IQuery<TResult>
 {
-    private readonly IEnumerable<IValidator<TRequest>> _validators;
+    private readonly IQueryHandler<TQuery, TResult> _inner;
+    private readonly IReadOnlyList<IValidator<TQuery>> _validators;
 
-    public ValidationBehavior(IEnumerable<IValidator<TRequest>> validators)
+    public ValidationQueryHandler(
+        IQueryHandler<TQuery, TResult> inner,
+        IEnumerable<IValidator<TQuery>> validators)
     {
-        _validators = validators;
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(validators);
+
+        _inner = inner;
+        _validators = validators.ToArray();
     }
 
-    public async Task<TResponse> Handle(
-        TRequest request,
-        RequestHandlerDelegate<TResponse> next,
-        CancellationToken cancellationToken)
+    public async Task<TResult> HandleAsync(TQuery query, CancellationToken cancellationToken = default)
     {
-        var validators = _validators.ToArray();
-        if (validators.Length == 0)
+        if (_validators.Count == 0)
         {
-            return await next();
+            return await _inner.HandleAsync(query, cancellationToken);
         }
 
-        var context = new ValidationContext<TRequest>(request);
+        var context = new ValidationContext<TQuery>(query);
         var results = await Task.WhenAll(
-            validators.Select(validator => validator.ValidateAsync(context, cancellationToken)));
+            _validators.Select(validator => validator.ValidateAsync(context, cancellationToken)));
 
         var failures = results
             .SelectMany(result => result.Errors)
@@ -52,7 +59,7 @@ public sealed class ValidationBehavior<TRequest, TResponse> : IPipelineBehavior<
             throw new RequestValidationException(errors);
         }
 
-        return await next();
+        return await _inner.HandleAsync(query, cancellationToken);
     }
 
     // FluentValidation reports the C# property name ("Limit", "CardId"). The JSON

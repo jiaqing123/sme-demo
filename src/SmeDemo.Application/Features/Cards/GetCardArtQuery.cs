@@ -1,14 +1,12 @@
-using AutoMapper;
-using MediatR;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Contracts;
 using SmeDemo.Application.Errors;
 
 namespace SmeDemo.Application.Features.Cards;
 
-public sealed record GetCardArtQuery(Guid UserId, Guid CardId) : IRequest<CardArtResult>;
+public sealed record GetCardArtQuery(Guid UserId, Guid CardId) : IQuery<CardArtResult>;
 
-public sealed class GetCardArtHandler : IRequestHandler<GetCardArtQuery, CardArtResult>
+public sealed class GetCardArtHandler : IQueryHandler<GetCardArtQuery, CardArtResult>
 {
     private readonly ICardRepository _cards;
     private readonly IBlobStore _blobs;
@@ -19,17 +17,19 @@ public sealed class GetCardArtHandler : IRequestHandler<GetCardArtQuery, CardArt
         _blobs = blobs;
     }
 
-    public async Task<CardArtResult> Handle(GetCardArtQuery request, CancellationToken cancellationToken)
+    public async Task<CardArtResult> HandleAsync(
+        GetCardArtQuery query,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(query);
 
-        var card = await _cards.GetByIdAsync(request.CardId, cancellationToken);
+        var card = await _cards.GetByIdAsync(query.CardId, cancellationToken);
         if (card is null)
         {
             throw new ResourceNotFoundException("The card was not found.");
         }
 
-        if (card.UserId != request.UserId)
+        if (card.UserId != query.UserId)
         {
             throw new ResourceForbiddenException("You do not have access to this card.");
         }

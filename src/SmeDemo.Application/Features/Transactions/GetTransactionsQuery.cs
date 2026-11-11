@@ -1,6 +1,4 @@
-using AutoMapper;
 using FluentValidation;
-using MediatR;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Contracts;
 using SmeDemo.Application.Errors;
@@ -11,7 +9,7 @@ public sealed record GetTransactionsQuery(
     Guid UserId,
     Guid CardId,
     string? Cursor,
-    int? Limit) : IRequest<TransactionListResponse>;
+    int? Limit) : IQuery<TransactionListResponse>;
 
 public sealed class GetTransactionsQueryValidator : AbstractValidator<GetTransactionsQuery>
 {
@@ -31,74 +29,62 @@ public sealed class GetTransactionsQueryValidator : AbstractValidator<GetTransac
     }
 }
 
-public sealed class GetTransactionsHandler : IRequestHandler<GetTransactionsQuery, TransactionListResponse>
+public sealed class GetTransactionsHandler : IQueryHandler<GetTransactionsQuery, TransactionListResponse>
 {
     private readonly ICardRepository _cards;
     private readonly ITransactionStore _transactions;
-    private readonly IMapper _mapper;
 
     public GetTransactionsHandler(
         ICardRepository cards,
-        ITransactionStore transactions,
-        IMapper mapper)
+        ITransactionStore transactions)
     {
         _cards = cards;
         _transactions = transactions;
-        _mapper = mapper;
     }
 
-    public async Task<TransactionListResponse> Handle(
-        GetTransactionsQuery request,
-        CancellationToken cancellationToken)
+    public async Task<TransactionListResponse> HandleAsync(
+        GetTransactionsQuery query,
+        CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(query);
 
-        var card = await _cards.GetByIdAsync(request.CardId, cancellationToken);
+        var card = await _cards.GetByIdAsync(query.CardId, cancellationToken);
         if (card is null)
         {
             throw new ResourceNotFoundException("The card was not found.");
         }
 
-        if (card.UserId != request.UserId)
+        if (card.UserId != query.UserId)
         {
             throw new ResourceForbiddenException("You do not have access to this card.");
         }
 
         string? afterRowKey = null;
-        if (request.Cursor is not null)
+        if (query.Cursor is not null)
         {
             // The validator already rejected an undecodable cursor; this only
             // turns the opaque token back into the storage key.
-            CursorCodec.TryDecode(request.Cursor, out afterRowKey);
+            CursorCodec.TryDecode(query.Cursor, out afterRowKey);
         }
 
-        var limit = request.Limit ?? GetTransactionsQueryValidator.DefaultLimit;
-        var page = await _transactions.ReadAsync(request.CardId, afterRowKey, limit, cancellationToken);
+        var limit = query.Limit ?? GetTransactionsQueryValidator.DefaultLimit;
+        var page = await _transactions.ReadAsync(query.CardId, afterRowKey, limit, cancellationToken);
 
+        // Hand-written mapping: one flat projection, visible at the call site.
         var items = page.Items
-            .Select(record => _mapper.Map<TransactionDto>(record))
+            .Select(record => new TransactionDto(
+                record.TransactionId.ToString(),
+                record.CardId,
+                record.AmountMinor,
+                record.Currency,
+                record.Direction,
+                record.Merchant,
+                record.Status,
+                record.OccurredAt))
             .ToArray();
 
         var nextCursor = page.NextRowKey is null ? null : CursorCodec.Encode(page.NextRowKey);
 
         return new TransactionListResponse(items, nextCursor);
-    }
-}
-
-public sealed class TransactionMappingProfile : Profile
-{
-    public TransactionMappingProfile()
-    {
-        CreateMap<TransactionRecord, TransactionDto>()
-            .ConstructUsing(source => new TransactionDto(
-                source.TransactionId.ToString(),
-                source.CardId,
-                source.AmountMinor,
-                source.Currency,
-                source.Direction,
-                source.Merchant,
-                source.Status,
-                source.OccurredAt))
-            .MaxDepth(64);
     }
 }

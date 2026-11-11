@@ -74,10 +74,16 @@ jobs:
             --output "$RUNNER_TEMP/sme_auth.sql"
           diff -u db/migrations/auth/sme_auth.sql "$RUNNER_TEMP/sme_auth.sql"
 
-      - name: Check licensing pins
+      # MediatR and AutoMapper were removed by decision (docs/licensing.md §3).
+      # Fail if either is reintroduced in a project or in central package
+      # management without revisiting that decision.
+      - name: Check removed packages stay removed
         run: |
-          ! grep -E '<PackageVersion Include="MediatR" Version="(1[3-9]|[2-9][0-9])' Directory.Packages.props
-          ! grep -E '<PackageVersion Include="AutoMapper" Version="(1[5-9]|[2-9][0-9])' Directory.Packages.props
+          if grep -rE '<Package(Reference|Version) Include="(MediatR|AutoMapper)"' \
+              --include='*.csproj' --include='*.props' .; then
+            echo "MediatR/AutoMapper must not be reintroduced; see docs/licensing.md §3." >&2
+            exit 1
+          fi
 
   web:
     name: Web build and tests

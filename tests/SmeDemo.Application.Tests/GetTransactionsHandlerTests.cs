@@ -19,7 +19,7 @@ public sealed class GetTransactionsHandlerTests
         _repository = new FakeCardRepository();
         _repository.Cards.Add(TestData.CreateCard(_cardId, TestData.UserId, 0));
         _store = new FakeTransactionStore();
-        _handler = new GetTransactionsHandler(_repository, _store, TestData.CreateMapper());
+        _handler = new GetTransactionsHandler(_repository, _store);
     }
 
     [TestMethod]
@@ -30,7 +30,7 @@ public sealed class GetTransactionsHandlerTests
             _store.Records.Add(TestData.CreateTransaction(_cardId, sequence));
         }
 
-        var response = await _handler.Handle(
+        var response = await _handler.HandleAsync(
             new GetTransactionsQuery(TestData.UserId, _cardId, null, null),
             CancellationToken.None);
 
@@ -48,7 +48,7 @@ public sealed class GetTransactionsHandlerTests
         _store.Records.Add(TestData.CreateTransaction(_cardId, 1));
         _store.Records.Add(TestData.CreateTransaction(_cardId, 2));
 
-        var response = await _handler.Handle(
+        var response = await _handler.HandleAsync(
             new GetTransactionsQuery(TestData.UserId, _cardId, null, 10),
             CancellationToken.None);
 
@@ -67,7 +67,7 @@ public sealed class GetTransactionsHandlerTests
         var ordered = _store.Records.OrderBy(record => record.RowKey, StringComparer.Ordinal).ToArray();
         var cursor = CursorCodec.Encode(ordered[1].RowKey);
 
-        var response = await _handler.Handle(
+        var response = await _handler.HandleAsync(
             new GetTransactionsQuery(TestData.UserId, _cardId, cursor, 2),
             CancellationToken.None);
 
@@ -82,7 +82,7 @@ public sealed class GetTransactionsHandlerTests
     public async Task Handle_UnknownCardThrowsNotFound()
     {
         await Assert.ThrowsExactlyAsync<ResourceNotFoundException>(() =>
-            _handler.Handle(
+            _handler.HandleAsync(
                 new GetTransactionsQuery(TestData.UserId, Guid.NewGuid(), null, 20),
                 CancellationToken.None));
     }
@@ -91,7 +91,7 @@ public sealed class GetTransactionsHandlerTests
     public async Task Handle_OtherUsersCardThrowsForbidden()
     {
         await Assert.ThrowsExactlyAsync<ResourceForbiddenException>(() =>
-            _handler.Handle(
+            _handler.HandleAsync(
                 new GetTransactionsQuery(TestData.OtherUserId, _cardId, null, 20),
                 CancellationToken.None));
     }
