@@ -130,10 +130,10 @@ Compose network and never holds a signing key.
 | Authentication | `Microsoft.AspNetCore.Authentication.JwtBearer` |
 | Token creation | `Microsoft.IdentityModel.JsonWebTokens` |
 | Password hashing | `Microsoft.AspNetCore.Identity.PasswordHasher<T>` (PBKDF2) |
-| OpenAPI | built-in `Microsoft.AspNetCore.OpenApi` |
+| OpenAPI | built-in `Microsoft.AspNetCore.OpenApi`; the document is a committed build artefact (`openapi/v1.json`) |
 | Errors | built-in `ProblemDetails` + `IExceptionHandler` |
-| Health checks | `Microsoft.Extensions.Diagnostics.HealthChecks` |
-| Logging | built-in `Microsoft.Extensions.Logging`, JSON console |
+| Health checks | plain `GET /healthz` liveness endpoint; no `Microsoft.Extensions.Diagnostics.HealthChecks` middleware and no `/readyz` readiness probe yet |
+| Logging | built-in `Microsoft.Extensions.Logging`, console output (no JSON console configured) |
 
 **Preference rule.** Microsoft packages come first for runtime, hosting,
 authentication, data access, and outbound HTTP. A well-maintained OSS library is
@@ -142,7 +142,8 @@ FluentValidation qualifies (Apache-2.0). Mediator and object-mapping libraries
 are out by policy: the contracts are a handful of interfaces in `Application`,
 and a flat projection is clearer written by hand (§13.2). Packages that
 duplicate a first-party capability without adding much stay out: Serilog
-(built-in logging), Swashbuckle (built-in OpenAPI), Dapper (EF Core),
+(built-in logging), Swashbuckle (excluded; the built-in
+`Microsoft.AspNetCore.OpenApi` already produces the document), Dapper (EF Core),
 MassTransit (not needed at this size).
 
 ### 5.5 Layering rules
@@ -354,7 +355,7 @@ except `/healthz`.
 | GET | `/api/v1/me/cards/{card_id}/transactions` | Transactions for one card, newest first. |
 | GET | `/api/v1/cards/{card_id}/art` | Card artwork, streamed from blob storage. |
 | GET | `/healthz` | Liveness for Compose. |
-| GET | `/openapi/v1.json` | OpenAPI document (Development only). |
+| GET | `/openapi/v1.json` | Runtime OpenAPI document (Development only); the committed build-time copy is [`openapi/v1.json`](../openapi/v1.json). |
 
 ### 7.1 Responses
 
@@ -838,6 +839,12 @@ exists for debugging and the documented curl examples. Every published port
 binds to `127.0.0.1`: the demo credential and OTP are part of the documentation,
 so the stack must not be reachable from another machine.
 
+All application healthchecks above are **liveness only**: `/healthz` reports that
+the process is running. They do not check SQL Server, Table/Blob Storage, or the
+auth metadata endpoint, so Compose can report `auth` and `api` healthy while a
+dependency is unavailable; there is no `/readyz` endpoint yet. Readiness probes,
+and switching the Compose healthchecks to them, are a PR 2 gap.
+
 ### 10.2 Compose profiles
 
 One profile: everything. There is no lite mode, because the only component that
@@ -969,9 +976,9 @@ Rules:
 - CORS allowlist limited to the web origin.
 - No PAN, CVV, or PIN anywhere in code, seed data, or logs.
 - Card art served only through the API; storage credentials stay server-side.
-- Application logs redact phone numbers and tokens. The demo-only `sms-mock`
-  deliberately records the recipient and message text (including the OTP); that
-  is its delivery mechanism and is documented in §6.5.
+- Application logs do not contain phone numbers, tokens, passwords, or OTP codes.
+  The demo-only `sms-mock` deliberately records the recipient and message text
+  (including the OTP); that is its delivery mechanism and is documented in §6.5.
 
 ### 11.3 Accepted for the demo only (must not ship)
 
@@ -1025,8 +1032,8 @@ The demo is done when all of these hold on a clean machine:
     containing `123456` in the `sms-mock` log, while the OTP behaviour and
     challenge rules are unchanged.
 17. Stopping `sms-mock` makes login return `503` with `UPSTREAM_UNAVAILABLE` and
-    a readable message, not `500`; `auth` stays healthy, and starting
-    `sms-mock` again restores login.
+    a readable message, not `500`; `auth` stays up (its `/healthz` liveness probe
+    still returns 200), and starting `sms-mock` again restores login.
 18. `http://localhost:8080` serves the SPA directly and forwards `/auth/*` and
     `/api/*` to their services; the browser never needs to reach 8081 or 8082.
 

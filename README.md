@@ -54,11 +54,27 @@ today:
   sync/SMS failure paths; 66 frontend tests for formatting, session, request
   handling, sign-in, the wallet and the transaction list.
 - CI in `.github/workflows/ci.yml`: on every push to `main` and every pull
-  request it builds and tests .NET (Release) plus the web app, and fails when
-  either DbContext has a model change without a migration.
+  request it builds and tests .NET (Release) and the web app, checks formatting,
+  pending migrations, and generated SQL, regenerates the OpenAPI document, scans
+  dependencies and secrets, builds images tagged by commit SHA, and runs a
+  Compose smoke test that logs in through `auth` and calls `GET /api/v1/me`.
 
 Not implemented yet: a real deployment and a real identity provider
 (requirements §3 and §10.6; the demo runs locally from Compose).
+
+## Reference baseline
+
+The conventions a new service should copy live in
+[`docs/reference/`](docs/reference/README.md): the baseline rules, the
+[Definition of Done](docs/reference/definition-of-done.md), the
+[ADR index](docs/reference/adr/README.md), the
+[add-a-resource cookbook](docs/reference/cookbook-add-resource.md), and the
+[versioning rule](docs/reference/versioning.md).
+
+The API contract is committed as [`openapi/v1.json`](openapi/v1.json). It is
+generated during `dotnet build`, not hand-edited; see
+[`docs/development.md`](docs/development.md#openapi-document) for generation and
+consumption.
 
 ## Security
 
@@ -74,6 +90,13 @@ financial services, so the design assumes a motivated attacker: read the
   rate limiting, MFA/step-up, token revocation, dependency/image scanning, and a
   penetration test. The production gap register is in
   [`docs/threat-model.md`](docs/threat-model.md) §7.
+
+## Licensing and distribution
+
+This is an internal repository. It is not distributed outside the company, so no
+open-source `LICENSE` file is added. External distribution would require a
+licence decision and a `THIRD-PARTY-NOTICES` file. See
+[`docs/licensing.md`](docs/licensing.md) §4.
 
 ## Quick start
 
@@ -116,9 +139,11 @@ TypeScript check and the production build. See
 ```
 docs/requirements.md                System requirements and architecture
 docs/development.md                 How to build, migrate, run auth, and reset
+docs/reference/                     baseline rules, Definition of Done, ADR index, cookbook, versioning
 docs/native-di-dispatch.md          Team standard for command/query handlers
 docs/licensing.md                   Third-party licensing notes for management review
 docs/declarative-schema-workshop.md 45-minute walkthrough of state-based schema tooling
+openapi/v1.json                     generated OpenAPI document (committed build artefact)
 src/SmeDemo.Api                     resource API endpoints and composition root
 src/SmeDemo.Application             handlers, DTOs, validators, ports
 src/SmeDemo.Domain                  entities and invariants
@@ -133,6 +158,7 @@ tests/SmsMock.Tests                 SMS mock HTTP contract tests
 tests/Migrator.Tests                migrator script tests
 tests/SmeDemo.Application.Tests     handler and validator tests
 tests/SmeDemo.Api.Tests             HTTP contract tests through WebApplicationFactory
+tests/SmeDemo.Architecture.Tests    executable layering, endpoint-purity, and metadata rules
 tests/SmeDemo.Auth.Tests            challenge and token claim tests
 tests/SmeDemo.Infrastructure.Tests  issuer sync service tests
 tools/Migrator                      one-shot schema applier

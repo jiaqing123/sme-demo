@@ -114,6 +114,12 @@ Everything listed in §2 is permissive. Redistributing a build would require
 including the relevant copyright notices — a `THIRD-PARTY-NOTICES` file added
 before shipping externally — but no source disclosure.
 
+**Internal repository.** This repository is internal and is not distributed
+outside the company. Therefore no open-source `LICENSE` file is added, and
+`THIRD-PARTY-NOTICES` is not required for the current use. External distribution
+would require a licence decision and a `THIRD-PARTY-NOTICES` file; that decision
+has not been made.
+
 ## 5. SQL Server Developer edition
 
 The container image is the Developer edition, licensed by Microsoft for

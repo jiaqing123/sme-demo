@@ -27,15 +27,17 @@ tools/Migrator                     one-shot schema applier (runs in its own cont
 db/migrations/api/*.sql            generated, committed, idempotent API schema scripts
 db/migrations/auth/*.sql           generated, committed, idempotent auth schema scripts
 db/bootstrap/app-logins.sql        creates the read/write-only application logins
+openapi/v1.json                    generated OpenAPI document (committed build artefact)
 tests/IssuerMock.Tests             fixture contract, auth and ordering tests
 tests/SmsMock.Tests                SMS mock HTTP contract tests
 tests/SmeDemo.Application.Tests    handler and validator unit tests
 tests/SmeDemo.Api.Tests            integration tests through WebApplicationFactory
+tests/SmeDemo.Architecture.Tests   layering, endpoint-purity, and endpoint-metadata rules
 tests/SmeDemo.Auth.Tests           challenge-rule and token-claim tests
 tests/SmeDemo.Infrastructure.Tests IssuerSyncService tests against fake ports/InMemory EF
 docker-compose.yml                 SQL Server, migrators, grants, Azurite, sms-mock, issuer-mock, auth, API
 docker-compose.dcproj              Visual Studio Compose project (F5 debugging of auth and API)
-docs/                              requirements, licensing, native dispatch standard, workshop
+docs/                              requirements, reference baseline, licensing, native dispatch standard, workshop
 ```
 
 ## First run
@@ -427,6 +429,48 @@ this is a development setting, not something to carry into a deployed
 environment. If metadata retrieval fails, the API rejects every token and its
 log shows a metadata/connection error.
 
+## OpenAPI document
+
+[`openapi/v1.json`](../openapi/v1.json) is a committed build artefact, not a file
+maintained by hand.
+
+The API references `Microsoft.Extensions.ApiDescription.Server` in
+`src/SmeDemo.Api/SmeDemo.Api.csproj`. During `dotnet build` that package starts
+the API entry point with the `GetDocument.Insider` entry assembly and inert
+options, reads the document from the service container, and writes it to
+`openapi/v1.json`. `Program.cs` detects that entry assembly and calls
+`ApiOptions.ForOpenApiDocumentGeneration()`, so the build-time run contacts no
+database, signing key, or network endpoint. The output directory and file name
+come from `OpenApiDocumentsDirectory` and `OpenApiGenerateDocumentsOptions` in
+the project file.
+
+The document is produced from endpoint metadata. `BearerSecuritySchemeTransformer`
+declares the `Bearer` scheme, and `EndpointSecurityTransformer` adds the
+requirement to every operation that is not explicitly `AllowAnonymous`; `/healthz`
+is therefore documented without a security requirement.
+
+Regenerate and check the committed file:
+
+```powershell
+dotnet build src/SmeDemo.Api/SmeDemo.Api.csproj --configuration Release
+git diff --exit-code -- openapi/
+```
+
+A stale file shows up as a git diff. CI builds the solution and runs the same
+diff, so a route or contract change cannot ship without the regenerated document.
+
+At runtime, `GET /openapi/v1.json` is mapped only in Development
+(`app.MapOpenApi().AllowAnonymous()`), so it is not part of production
+behaviour. The served document differs from the committed one only by the
+`servers` entry derived from the request;
+[`OpenApiContractTests`](../tests/SmeDemo.Api.Tests/OpenApiContractTests.cs)
+normalises that field and compares everything else.
+
+To consume the contract, point a client generator at the committed file, or at
+the Development endpoint while the API is running. Both describe the same
+operations; the token itself comes from `auth` and is not embedded in the
+document. Commit regenerated clients with the contract change.
+
 ## Web front-end
 
 The browser UI lives in `web/`. It is a React 18 + TypeScript + Vite SPA with
@@ -546,29 +590,179 @@ and removed on sign-out or session expiry. It is never stored in `localStorage`.
 ## Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main`, every pull request, and
-on demand:
+on demand. It has five jobs:
 
-- **.NET build and tests** — .NET 10, `dotnet tool restore`, a Release build and
-  `dotnet test`, then `has-pending-model-changes` for both DbContexts.
-- **Web build and tests** — Node 22, `npm ci`, `npm run build`, `npm test`.
+| Job | Runner / timeout | What it does |
+|-----|------------------|--------------|
+| `dotnet` | ubuntu, 20 min | checkout; set up .NET `10.0.x`; `dotnet tool restore`; `dotnet build SmeDemo.slnx --configuration Release`; `dotnet test SmeDemo.slnx --configuration Release --no-build`; `dotnet format SmeDemo.slnx --verify-no-changes`; verify `openapi/v1.json` exists and `git diff --exit-code -- openapi/` (the Release build regenerates it); pending-model checks for the API and auth DbContexts; generated-SQL diff for both; removed-package guard (MediatR/AutoMapper); `python3 tools/smoke/check-vulnerabilities.py`; gitleaks secret scan. |
+| `web` | ubuntu, 15 min | Node 22, `npm ci`, `npm run build`, `npm test`. |
+| `compose` | ubuntu, 5 min | copy `.env.example` to `.env`, then `docker compose config -q`. |
+| `images` | ubuntu, 40 min | build six images from the repository root: api, auth, web, sms-mock, issuer-mock, and migrator, each tagged with `${GITHUB_SHA}`; fail on any build error. |
+| `compose-smoke` | ubuntu, 45 min | start the minimal stack, wait for the one-shot containers and health, run `tools/smoke/compose-smoke.sh`, dump diagnostics on failure, and always tear down with volumes. |
 
-Neither job needs SQL Server, Azurite, or any other container: the API tests
-replace the repositories and storage with fakes, the auth tests use EF InMemory,
-and the frontend tests run in jsdom. The commands work locally too, so a red job
-can be reproduced without the runner:
+The `dotnet`, `web`, and `compose` jobs need no SQL Server, Azurite, or SMS
+container: the API tests replace the repositories and storage with fakes, the
+auth tests use EF InMemory, and the frontend tests run in jsdom.
+
+### Format gate
+
+CI runs `dotnet format SmeDemo.slnx --verify-no-changes` on Linux. The command may
+print a harmless warning that `docker-compose.dcproj` has no associated language;
+it still exits 0. Any non-zero exit fails the job.
+
+### OpenAPI gate
+
+The Release build runs the API project's build-time generator and rewrites
+`openapi/v1.json`. CI then checks that the file exists and that
+`git diff --exit-code -- openapi/` is clean. If the document is stale, the job
+fails and the error message tells you to rebuild
+`src/SmeDemo.Api/SmeDemo.Api.csproj` in Release and commit the regenerated file.
+The document is not edited by hand.
+
+### Dependency and secret scans
+
+The vulnerability gate is not raw `dotnet list package --vulnerable`, because that
+command exits 0 even when it reports findings. CI runs:
+
+```bash
+python3 tools/smoke/check-vulnerabilities.py
+```
+
+The script discovers every project (currently 16) under `src/`, `tests/`, and
+`tools/` (recursively, skipping `bin/` and `obj/`; `docker-compose.dcproj` is
+outside those directories). For each project it runs `dotnet list <project> package
+--vulnerable --include-transitive --format json --no-restore`, parses the JSON,
+and exits non-zero if any advisory is present, the command fails, or the output
+cannot be parsed. It uses only the Python standard library, so no third-party
+package is installed. It expects the Release build/restore to have run first.
+
+The secret gate uses a pinned gitleaks release, downloaded by CI and verified by
+SHA-256 before it runs:
+
+| Variable | Value |
+|----------|-------|
+| `GITLEAKS_VERSION` | `8.30.1` |
+| `GITLEAKS_SHA256` | `551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb` |
+| Linux x64 asset | `https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz` |
+
+The scan command is:
+
+```bash
+gitleaks detect --source . --no-git --redact --config .gitleaks.toml --exit-code 1
+```
+
+`--no-git` scans the working tree because `actions/checkout` fetches a shallow
+history. `.gitleaks.toml` extends the default rule set and allowlists only the
+Azurite emulator's documented well-known key plus local build/tool caches
+(`.vs/`, `.tmp-tools/`, `bin/`, `obj/`, `node_modules/`).
+
+### Compose smoke test
+
+The `compose-smoke` job prepares `.env` and starts the minimal set with `--build`:
+
+```bash
+docker compose up -d --build \
+  mssql azurite db-migrator db-migrator-auth db-grants auth api
+```
+
+It waits for `auth` and `api` to be healthy and for `db-migrator`,
+`db-migrator-auth`, and `db-grants` to exit 0, then runs
+`bash tools/smoke/compose-smoke.sh`. The script asserts six things and prints
+`PASS`/`FAIL` for each:
+
+1. `auth` returns 200 from `/healthz`.
+2. `api` returns 200 from `/healthz`.
+3. `POST /auth/login` returns 200 with a `challenge_id`.
+4. `POST /auth/challenges/<id>/verify` returns 200 with an `access_token`.
+5. `GET /api/v1/me` with the token returns 200 with the expected `org` and a
+   non-empty `name`.
+6. `GET /api/v1/me` without a token returns 401 with
+   `error.code = UNAUTHENTICATED`.
+
+On failure the job dumps `docker compose ps -a` and
+`docker compose logs --no-color`. The teardown step runs unconditionally:
+`docker compose down -v --remove-orphans`.
+
+### What you can verify locally
+
+The build, test, format, schema, OpenAPI, dependency-scan, secret-scan, web, and
+Compose-configuration checks reproduce without the runner:
 
 ```powershell
 dotnet tool restore
 dotnet build SmeDemo.slnx --configuration Release
 dotnet test SmeDemo.slnx --configuration Release --no-build
+dotnet format SmeDemo.slnx --verify-no-changes
+# Expected: the harmless docker-compose.dcproj warning; exit code 0.
+
 dotnet tool run dotnet-ef migrations has-pending-model-changes `
+  --project src/SmeDemo.Infrastructure --startup-project src/SmeDemo.Infrastructure
+dotnet tool run dotnet-ef migrations has-pending-model-changes `
+  --project src/SmeDemo.Auth --startup-project src/SmeDemo.Auth
+
+dotnet tool run dotnet-ef migrations script --idempotent `
   --project src/SmeDemo.Infrastructure --startup-project src/SmeDemo.Infrastructure `
-  --configuration Release --no-build
+  --output db/migrations/api/sme_api.sql
+dotnet tool run dotnet-ef migrations script --idempotent `
+  --project src/SmeDemo.Auth --startup-project src/SmeDemo.Auth `
+  --output db/migrations/auth/sme_auth.sql
+git diff --exit-code -- db/migrations
+
+dotnet build src/SmeDemo.Api/SmeDemo.Api.csproj --configuration Release
+git diff --exit-code -- openapi/
+
+python3 tools/smoke/check-vulnerabilities.py
+
 cd web
 npm ci
 npm run build
 npm test
+
+cd ..
+Copy-Item .env.example .env -Force   # only in a scratch checkout
+docker compose config -q
 ```
+
+The removed-package guard is the CI equivalent of:
+
+```powershell
+Select-String -Path (Get-ChildItem -Recurse -File -Include *.csproj,*.props).FullName `
+  -Pattern '<Package(Reference|Version) Include="(MediatR|AutoMapper)"'
+```
+
+For the secret scan, install the pinned gitleaks 8.30.1 binary for your platform
+from <https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1>, verify its
+checksum against the release, then run the same command:
+
+```bash
+gitleaks detect --source . --no-git --redact --config .gitleaks.toml --exit-code 1
+```
+
+CI uses the Linux x64 asset and SHA-256 listed above; use the matching asset for
+your operating system locally.
+
+### What runs only in CI today
+
+- **`images`** builds and tags all six application images with `${GITHUB_SHA}`.
+  `docker compose build` locally proves the Dockerfiles on your machine, but it is
+  not the same gate: the CI job builds every image, on Linux, from a clean
+  checkout, with the repository root as the build context.
+- **`compose-smoke`** starts the minimal real stack, performs the auth login and
+  OTP flow, and calls the API through the token. A full local run on 2026-11-11
+  passed all six checks (6/6). Reproduce it with the minimal `docker compose up
+  -d --build` command above, `bash tools/smoke/compose-smoke.sh`, and
+  `docker compose down -v --remove-orphans`; the CI job remains the required
+  Linux proof.
+
+### Verification status (2026-11-11)
+
+- The full Compose smoke flow was run locally against the real stack on
+  2026-11-11 and passed 6/6.
+- A second Release build produced an identical `openapi/v1.json` SHA-256, so the
+  build-time generation is deterministic.
+- GitHub Actions itself has not been executed. The Linux `dotnet format` run and
+  the stale-OpenAPI negative path remain unverified in CI; do not describe the
+  pipeline as green until it has run on GitHub.
 
 ## Everyday commands
 
