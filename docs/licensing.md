@@ -9,8 +9,10 @@
 
 - Every component in the demo is **free to use at our size**. No purchase is
   required.
-- There are **no copyleft obligations**: no GPL, AGPL, or SSPL component is
-  included, so nothing forces us to publish our own source.
+- There are **no strong copyleft obligations**: no GPL, AGPL, or SSPL component
+  is included, so nothing forces us to publish our own source. The only
+  weak-copyleft component is `lightningcss` (MPL-2.0), an unmodified build-time
+  tool that is not shipped in the SPA (§2.1).
 - **MediatR and AutoMapper are no longer dependencies.** Both moved to a
   commercial model in 2025. Rather than pin old versions or register licence
   keys, the demo now dispatches commands and queries through interfaces it owns
@@ -39,6 +41,30 @@
 Command/query dispatch and object mapping are implemented in this repository
 (`src/SmeDemo.Application/Abstractions/Messaging.cs` and the feature handlers),
 so they are not third-party components at all.
+
+### 2.1 Inventory check (2026-11-11)
+
+The full package graph was reviewed after the MediatR/AutoMapper removal:
+
+- **Direct .NET packages.** All are Microsoft/Azure (MIT) except
+  FluentValidation and its DI extensions (Apache-2.0). Those are the only
+  non-Microsoft direct dependencies.
+- **Transitive .NET packages.** Three non-Microsoft MIT packages —
+  `Humanizer.Core`, `Mono.TextTemplating`, and `Newtonsoft.Json` — arrive
+  through `Microsoft.EntityFrameworkCore.Design`, which is referenced with
+  `PrivateAssets="all"` and is absent from the API runtime output.
+  `Apache.Arrow` (Apache-2.0) is pulled by `Azure.Storage.Blobs` at runtime.
+- **npm.** The installed tree has 176 packages; all are MIT, Apache-2.0, ISC,
+  BSD, or MIT-0 except `lightningcss` (MPL-2.0) and `caniuse-lite`
+  (CC-BY-4.0). Both are build-time only and are not part of the served static
+  assets under `web/dist`.
+- **No GPL, AGPL, or SSPL** package appears in either graph, and
+  `dotnet list package --vulnerable --include-transitive` reports no advisories
+  for any project.
+
+Run the same check after any dependency change: inspect the direct references,
+run `dotnet nuget why <project> <package>` for anything unexpected, and confirm
+the licence of new npm packages before they enter `package.json`.
 
 ## 3. Why MediatR and AutoMapper were removed
 
@@ -124,4 +150,5 @@ past either limit, a per-seat subscription is required.
   review.
 - The GPL/AGPL/SSPL inventory is reviewed by hand whenever a package is added or
   upgraded; there is no automated licence scan.
+- The §2.1 inventory check is repeated after any dependency change.
 - This document is reviewed whenever a package is added or upgraded.
