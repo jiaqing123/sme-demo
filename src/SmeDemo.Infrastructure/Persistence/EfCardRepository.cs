@@ -1,9 +1,9 @@
-using System.Data.Common;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Errors;
 using SmeDemo.Domain.Entities;
+using System.Data.Common;
 
 namespace SmeDemo.Infrastructure.Persistence;
 

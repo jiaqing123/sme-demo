@@ -1,6 +1,5 @@
-using Microsoft.IdentityModel.JsonWebTokens;
+﻿using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Persistence;
 using SmeDemo.Auth.Security;

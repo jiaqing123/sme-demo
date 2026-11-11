@@ -1,7 +1,7 @@
-﻿using System.Security.Cryptography;
+﻿using SmeDemo.IssuerMock;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using SmeDemo.IssuerMock;
 
 var builder = WebApplication.CreateBuilder(args);
 

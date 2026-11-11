@@ -1,10 +1,4 @@
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.DependencyInjection;
-using SmeDemo.Application.Abstractions;
-using SmeDemo.Infrastructure.Persistence;
-using SmeDemo.Infrastructure.Storage;
-
-namespace SmeDemo.Infrastructure;
+﻿namespace SmeDemo.Infrastructure;
 
 /// <summary>
 /// Runtime configuration for the adapters. Only <see cref="DependencyInjection"/>

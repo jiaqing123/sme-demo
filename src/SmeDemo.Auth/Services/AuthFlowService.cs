@@ -1,5 +1,4 @@
-using System.Security.Cryptography;
-using Microsoft.AspNetCore.Identity;
+﻿using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using SmeDemo.Auth.Challenges;
 using SmeDemo.Auth.Configuration;
@@ -8,6 +7,7 @@ using SmeDemo.Auth.Errors;
 using SmeDemo.Auth.Persistence;
 using SmeDemo.Auth.Security;
 using SmeDemo.Auth.Sms;
+using System.Security.Cryptography;
 
 namespace SmeDemo.Auth.Services;
 

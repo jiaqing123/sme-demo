@@ -1,5 +1,4 @@
-using System.Net.Http.Json;
-using SmeDemo.Auth.Configuration;
+﻿using SmeDemo.Auth.Configuration;
 
 namespace SmeDemo.Auth.Sms;
 

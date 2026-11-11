@@ -1,4 +1,4 @@
-using SmeDemo.Infrastructure.Configuration;
+﻿using SmeDemo.Infrastructure.Configuration;
 
 namespace SmeDemo.Api.Configuration;
 

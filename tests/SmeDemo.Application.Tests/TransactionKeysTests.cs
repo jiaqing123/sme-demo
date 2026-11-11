@@ -1,5 +1,4 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using SmeDemo.Application.Features.Transactions;
+﻿using SmeDemo.Application.Features.Transactions;
 
 namespace SmeDemo.Application.Tests;
 

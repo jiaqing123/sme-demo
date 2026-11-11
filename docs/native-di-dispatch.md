@@ -123,15 +123,15 @@ Rules:
 Endpoints inject the handler they call; there is no global dispatcher:
 
 ```csharp
-private static async Task<IResult> GetCardsAsync(
-    ClaimsPrincipal user,
+private static async Task<Ok<CardListResponse>> GetCardsAsync(
+    CurrentUser user,
     IQueryHandler<GetCardsQuery, CardListResponse> handler,
     CancellationToken cancellationToken)
 {
     var response = await handler.HandleAsync(
-        new GetCardsQuery(UserClaims.GetUserId(user)), cancellationToken);
+        new GetCardsQuery(user.UserId), cancellationToken);
 
-    return Results.Ok(response);
+    return TypedResults.Ok(response);
 }
 ```
 

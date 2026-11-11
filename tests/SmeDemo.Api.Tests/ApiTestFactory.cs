@@ -1,6 +1,4 @@
-using System.Security.Cryptography;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
+﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -14,6 +12,8 @@ using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Errors;
 using SmeDemo.Application.Features.Transactions;
 using SmeDemo.Domain.Entities;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace SmeDemo.Api.Tests;
 

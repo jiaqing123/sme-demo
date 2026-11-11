@@ -1,7 +1,6 @@
+﻿using SmeDemo.Infrastructure.Issuer;
 using System.Net;
 using System.Text;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using SmeDemo.Infrastructure.Issuer;
 
 namespace SmeDemo.Infrastructure.Tests;
 

@@ -1,6 +1,6 @@
+﻿using SmeDemo.Application.Abstractions;
 using System.Globalization;
 using System.Text.Json;
-using SmeDemo.Application.Abstractions;
 
 namespace SmeDemo.Infrastructure.Issuer;
 

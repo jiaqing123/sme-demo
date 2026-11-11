@@ -1,6 +1,6 @@
+﻿using Microsoft.IdentityModel.Tokens;
 using System.Security.Cryptography;
 using System.Text.Json;
-using Microsoft.IdentityModel.Tokens;
 
 namespace SmeDemo.Auth.Security;
 

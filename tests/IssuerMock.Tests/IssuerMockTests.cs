@@ -1,7 +1,6 @@
+﻿using Microsoft.AspNetCore.Mvc.Testing;
 using System.Net;
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace IssuerMock.Tests;
 

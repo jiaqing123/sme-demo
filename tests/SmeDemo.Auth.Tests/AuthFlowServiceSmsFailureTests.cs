@@ -1,8 +1,7 @@
-using Microsoft.AspNetCore.Http;
+﻿using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SmeDemo.Auth.Challenges;
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Contracts;

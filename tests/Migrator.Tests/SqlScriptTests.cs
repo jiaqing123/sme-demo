@@ -1,7 +1,4 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using SmeDemo.Migrator;
-
-namespace SmeDemo.Migrator.Tests;
+﻿namespace SmeDemo.Migrator.Tests;
 
 [TestClass]
 public sealed class SqlScriptTests

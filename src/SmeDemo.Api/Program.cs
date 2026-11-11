@@ -1,8 +1,10 @@
 ﻿using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using SmeDemo.Api.Auth;
 using SmeDemo.Api.Configuration;
 using SmeDemo.Api.Endpoints;
 using SmeDemo.Api.Errors;
+using SmeDemo.Api.Http;
 using SmeDemo.Application;
 using SmeDemo.Infrastructure;
 using SmeDemo.Infrastructure.Issuer;
@@ -41,7 +43,18 @@ builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(bearer => JwtBearerSetup.Configure(bearer, options));
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(authorization =>
+{
+    authorization.FallbackPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+
+    authorization.AddPolicy(AuthPolicies.ApiUser, policy => policy
+        .RequireAuthenticatedUser()
+        .AddRequirements(new OrgRequirement(options.OrgId)));
+});
+builder.Services.AddSingleton<IAuthorizationHandler, OrgAuthorizationHandler>();
+builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, ProblemAuthorizationResultHandler>();
 
 builder.Services.AddOpenApi();
 
@@ -91,15 +104,20 @@ app.UseStatusCodePages(async statusCodeContext =>
 
 app.UseCors();
 
-// Account data must not sit in a shared or disk cache. Artwork keeps its own
-// private cache policy, so only the /me routes are affected.
+// Cache policy is endpoint metadata, not a path check: the route declares the
+// header value and this middleware writes it before the response starts. It
+// runs before authentication so a 401/403 still carries the route's policy.
 app.Use(async (context, next) =>
 {
-    if (context.Request.Path.StartsWithSegments("/api/v1/me"))
+    if (context.GetEndpoint()?.Metadata.GetMetadata<CacheControlMetadata>() is { } cache)
     {
         context.Response.OnStarting(() =>
         {
-            context.Response.Headers.CacheControl = "no-store";
+            if (cache.ApplyToErrorResponses || context.Response.StatusCode < 400)
+            {
+                context.Response.Headers.CacheControl = cache.Value;
+            }
+
             return Task.CompletedTask;
         });
     }
@@ -108,12 +126,11 @@ app.Use(async (context, next) =>
 });
 
 app.UseAuthentication();
-app.UseMiddleware<OrgClaimMiddleware>();
 app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.MapOpenApi().AllowAnonymous();
 }
 
 app.MapResourceEndpoints();

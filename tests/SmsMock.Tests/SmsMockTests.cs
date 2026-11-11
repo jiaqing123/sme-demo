@@ -1,9 +1,8 @@
+﻿using Microsoft.AspNetCore.Mvc.Testing;
 using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace SmsMock.Tests;
 

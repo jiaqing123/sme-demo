@@ -1,5 +1,4 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using SmeDemo.Auth.Configuration;
+﻿using SmeDemo.Auth.Configuration;
 
 namespace SmeDemo.Auth.Tests;
 

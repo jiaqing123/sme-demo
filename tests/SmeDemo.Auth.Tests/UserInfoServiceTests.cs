@@ -1,14 +1,13 @@
-using System.Security.Cryptography;
-using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Contracts;
 using SmeDemo.Auth.Persistence;
 using SmeDemo.Auth.Security;
 using SmeDemo.Auth.Services;
+using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace SmeDemo.Auth.Tests;
 

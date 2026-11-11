@@ -1,5 +1,4 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using SmeDemo.Application.Features.Cards;
+﻿using SmeDemo.Application.Features.Cards;
 
 namespace SmeDemo.Application.Tests;
 

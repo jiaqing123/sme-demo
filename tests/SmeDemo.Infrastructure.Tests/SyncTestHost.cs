@@ -1,9 +1,8 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Domain.Entities;
-using SmeDemo.Infrastructure;
 using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Persistence;
 

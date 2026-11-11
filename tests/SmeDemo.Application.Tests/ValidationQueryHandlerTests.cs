@@ -1,5 +1,4 @@
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using SmeDemo.Application.Abstractions;
+﻿using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Contracts;
 using SmeDemo.Application.Decorators;
 using SmeDemo.Application.Errors;
