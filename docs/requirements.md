@@ -1,8 +1,12 @@
 # SME Demo — System Requirements & Architecture
 
-- **Status:** Draft v0.4
+- **Status:** Draft v0.5
 - **Owner:** Architecture
 - **Last updated:** 2026-11-11
+- **Changes in v0.5:** security is now a release gate. The financial-sector
+  threat model, abuse cases, and production gap register live in
+  [`threat-model.md`](threat-model.md) and are normative for production
+  adaptations (§11).
 - **Changes in v0.4:** MediatR and AutoMapper removed. Commands and queries
   dispatch through interfaces owned by `Application`, and projections are
   hand-written (§13.2).
@@ -34,6 +38,7 @@ behind an adapter, not a direct database call.
 | G4 | Every demo shortcut is explicit and switchable, so nothing silently becomes production behaviour. |
 | G5 | The layering is conventional and boring: thin endpoints, logic in the application layer, data and third-party access in the infrastructure layer. |
 | G6 | Swapping the mock issuer or mock SMS provider for a real one is an adapter change, not a rewrite. |
+| G7 | Security is a release gate: the reference architecture assumes a motivated attacker, documents its trust boundaries and abuse cases, and keeps demo shortcuts explicit and isolated. |
 
 ## 3. Non-goals
 
@@ -917,7 +922,45 @@ the demo earns a server, the split applies unchanged: a small
 pipeline that applies it on merge.
 
 
-Implemented:
+## 11. Security
+
+### 11.1 Threat model and security posture
+
+This system is the reference architecture for a financial-services company and
+must assume it is a target of motivated external and insider attackers. Security
+is a release gate, not a demo feature. The threat model, assets, trust
+boundaries, abuse cases, and production gap register live in
+[`threat-model.md`](threat-model.md); that document is normative for any
+production adaptation.
+
+Rules:
+
+- Every new endpoint, data store, third-party integration, authentication change,
+  or new class of personal/financial data requires a threat-model review and
+  abuse-case tests before merge.
+- Demo shortcuts stay explicit, isolated behind `DEMO_MODE` or Compose, and are
+  listed in §11.3. No shortcut may silently become production behaviour.
+- No PAN, CVV, or PIN is stored, logged, or transmitted. If a production
+  adaptation introduces card data, PCI DSS scope and tokenisation must be
+  designed before code.
+- Secrets never live in the repository, images, logs, or client bundles. The
+  demo `.env` is local-only; production uses a secret manager or workload
+  identity.
+- Authentication and authorisation are default-deny. Public endpoints are
+  explicitly anonymous; object-level authorisation is tested, not assumed.
+- Rate limiting, request timeouts, and resource limits are required on every
+  externally reachable service; `429` and `503` responses carry `Retry-After`.
+- TLS terminates at the edge in production; HSTS, secure headers, and
+  `X-Content-Type-Options: nosniff` are part of the baseline.
+- Security events (login success/failure, OTP failure, authorisation denial,
+  token rejection, admin/ops action) are logged with correlation IDs and without
+  PII or credentials.
+- Dependencies and images are pinned, scanned, and produced with an SBOM; images
+  are tagged by commit SHA, never `latest`.
+- A penetration test and an incident-response runbook are required before any
+  internet-facing production deployment.
+
+### 11.2 Implemented in the demo
 
 - Passwords hashed with PBKDF2 (ASP.NET Core Identity hasher), even for the one
   demo account.
@@ -930,7 +973,11 @@ Implemented:
   deliberately records the recipient and message text (including the OTP); that
   is its delivery mechanism and is documented in §6.5.
 
-Accepted for the demo, listed so nobody mistakes them for production:
+### 11.3 Accepted for the demo only (must not ship)
+
+The following are localhost-only shortcuts. `docs/threat-model.md` §7 maps each
+one to its production replacement; none of them is acceptable in an
+internet-facing deployment.
 
 - Plain HTTP on localhost, no TLS.
 - Token in `sessionStorage` rather than an httpOnly cookie.

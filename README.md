@@ -60,6 +60,21 @@ today:
 Not implemented yet: a real deployment and a real identity provider
 (requirements §3 and §10.6; the demo runs locally from Compose).
 
+## Security
+
+This is a reference/demo system, not a production deployment. The company is in
+financial services, so the design assumes a motivated attacker: read the
+[threat model](docs/threat-model.md) and requirements §11 before adapting it.
+
+- Do not expose the Compose stack beyond `127.0.0.1`. The demo password, fixed
+  OTP, and `sms-mock` plaintext logs are public by design.
+- `auth` is a demo issuer and is expected to be replaced; the fixed OTP is
+  unreachable unless `DEMO_MODE=true`.
+- Production requires, at minimum: TLS + HSTS, a secret manager, per-IP/account
+  rate limiting, MFA/step-up, token revocation, dependency/image scanning, and a
+  penetration test. The production gap register is in
+  [`docs/threat-model.md`](docs/threat-model.md) §7.
+
 ## Quick start
 
 ```powershell
