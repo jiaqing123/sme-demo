@@ -1,0 +1,27 @@
+# Gitleaks configuration for the working-tree scan in CI
+# (`gitleaks detect --source . --no-git --redact --exit-code 1`).
+title = "sme-demo gitleaks configuration"
+
+[extend]
+# Keep the upstream rule set and add only the exceptions this repository needs.
+useDefault = true
+
+[allowlist]
+description = "Committed Azurite emulator key and local build output"
+
+# docker-compose.yml publishes the Azurite emulator's well-known development
+# account key. It is the value Azure documents for local emulation, is not a
+# credential to any deployed service, and the container is bound to 127.0.0.1.
+regexes = [
+  '''Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==''',
+]
+
+# Generated output and local tooling caches are not source. A clean GitHub
+# checkout does not contain them, but the same command runs locally.
+paths = [
+  '''(^|/)\.vs/''',
+  '''(^|/)\.tmp-tools/''',
+  '''(^|/)bin/''',
+  '''(^|/)obj/''',
+  '''(^|/)node_modules/''',
+]

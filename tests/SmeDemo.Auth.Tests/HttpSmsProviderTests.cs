@@ -1,8 +1,8 @@
-﻿using Microsoft.Extensions.Logging.Abstractions;
+﻿using System.Net;
+using System.Text.Json;
+using Microsoft.Extensions.Logging.Abstractions;
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Sms;
-using System.Net;
-using System.Text.Json;
 
 namespace SmeDemo.Auth.Tests;
 

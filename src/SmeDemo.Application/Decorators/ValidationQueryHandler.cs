@@ -1,7 +1,7 @@
-﻿using FluentValidation;
+﻿using System.Text;
+using FluentValidation;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Errors;
-using System.Text;
 
 namespace SmeDemo.Application.Decorators;
 

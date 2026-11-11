@@ -1,11 +1,11 @@
-﻿using Microsoft.AspNetCore.Authorization;
+﻿using System.Net;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using SmeDemo.Api.Http;
-using System.Net;
-using System.Net.Http.Headers;
-using System.Text.Json;
 
 namespace SmeDemo.Api.Tests;
 

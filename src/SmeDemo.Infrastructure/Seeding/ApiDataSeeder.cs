@@ -1,10 +1,10 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Reflection;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Infrastructure.Persistence;
-using System.Reflection;
 
 namespace SmeDemo.Infrastructure.Seeding;
 
