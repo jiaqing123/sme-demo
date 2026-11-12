@@ -38,9 +38,17 @@ public sealed class AuthTestFactory : WebApplicationFactory<Program>
     private readonly string _databaseName = $"sme-auth-http-{Guid.NewGuid():N}";
     private readonly string _keysPath;
     private readonly ManualTimeProvider _clock;
+    private readonly IReadOnlyDictionary<string, string>? _settings;
 
-    public AuthTestFactory()
+    /// <param name="settings">
+    /// Optional per-instance host settings applied after the defaults (for
+    /// example small <c>AUTH_RATE_LIMIT_*</c> budgets). They use
+    /// <see cref="IWebHostBuilder.UseSetting(string, string)"/>, so factories
+    /// stay independent and process environment variables are never mutated.
+    /// </param>
+    public AuthTestFactory(IReadOnlyDictionary<string, string>? settings = null)
     {
+        _settings = settings;
         _keysPath = Path.Combine(Path.GetTempPath(), $"sme-auth-http-keys-{Guid.NewGuid():N}");
 
         // Start at the real instant: UserInfoService validates token lifetime
@@ -80,6 +88,14 @@ public sealed class AuthTestFactory : WebApplicationFactory<Program>
         builder.UseSetting("JWT_TTL", "30m");
         builder.UseSetting("CORS_ORIGIN", "http://localhost:8080");
         builder.UseSetting("KEYS_PATH", _keysPath);
+
+        if (_settings is not null)
+        {
+            foreach (var setting in _settings)
+            {
+                builder.UseSetting(setting.Key, setting.Value);
+            }
+        }
 
         builder.ConfigureTestServices(services =>
         {

@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -54,7 +54,9 @@ public sealed class UserInfoServiceTests
             JwtTtl: TimeSpan.FromMinutes(30),
             CorsOrigin: "http://localhost:8080",
             KeysPath: _keysPath,
-            SmsProviderUrl: null);
+            SmsProviderUrl: null,
+            RateLimits: AuthRateLimitOptions.Default,
+            TrustForwardedHeaders: false);
 
         var dbOptions = new DbContextOptionsBuilder<AuthDbContext>()
             .UseInMemoryDatabase($"sme-auth-{Guid.NewGuid():N}")

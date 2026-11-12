@@ -45,11 +45,19 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
 
     private readonly string _databaseUrl;
     private readonly string _jwtAudience;
+    private readonly int? _rateLimitPermit;
+    private readonly TimeSpan? _rateLimitWindow;
 
-    public ApiTestFactory(string? databaseUrl = null, string? jwtAudience = null)
+    public ApiTestFactory(
+        string? databaseUrl = null,
+        string? jwtAudience = null,
+        int? rateLimitPermit = null,
+        TimeSpan? rateLimitWindow = null)
     {
         _databaseUrl = databaseUrl ?? DefaultDatabaseUrl;
         _jwtAudience = jwtAudience ?? Audience;
+        _rateLimitPermit = rateLimitPermit;
+        _rateLimitWindow = rateLimitWindow;
         SeedData();
     }
 
@@ -182,6 +190,20 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         builder.UseSetting("PUBLIC_BASE_URL", "http://localhost:8082");
         builder.UseSetting("CORS_ORIGIN", "http://localhost:8080");
         builder.UseSetting("ISSUER_SYNC_ENABLED", "false");
+
+        if (_rateLimitPermit is { } permit)
+        {
+            builder.UseSetting("API_RATE_LIMIT_PERMIT", permit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        if (_rateLimitWindow is { } window)
+        {
+            // DurationParser reads a bare number as seconds; use whole seconds
+            // to keep the test setting unambiguous.
+            builder.UseSetting(
+                "API_RATE_LIMIT_WINDOW",
+                $"{Math.Max(1, (int)Math.Ceiling(window.TotalSeconds))}s");
+        }
 
         builder.ConfigureTestServices(services =>
         {

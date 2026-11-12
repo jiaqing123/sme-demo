@@ -1,4 +1,5 @@
-﻿using SmeDemo.Infrastructure.Configuration;
+using System.Globalization;
+using SmeDemo.Infrastructure.Configuration;
 
 namespace SmeDemo.Api.Configuration;
 
@@ -22,7 +23,9 @@ public sealed record ApiOptions(
     string IssuerBaseUrl,
     string IssuerApiKey,
     TimeSpan IssuerSyncInterval,
-    bool IssuerSyncEnabled)
+    bool IssuerSyncEnabled,
+    int RateLimitPermit,
+    TimeSpan RateLimitWindow)
 {
     public static ApiOptions FromConfiguration(IConfiguration configuration)
     {
@@ -80,7 +83,9 @@ public sealed record ApiOptions(
             IssuerSyncInterval: issuerSyncEnabled
                 ? ReadDuration(configuration, "ISSUER_SYNC_INTERVAL", "5m")
                 : TimeSpan.FromMinutes(5),
-            IssuerSyncEnabled: issuerSyncEnabled);
+            IssuerSyncEnabled: issuerSyncEnabled,
+            RateLimitPermit: ReadPositiveInt(configuration, "API_RATE_LIMIT_PERMIT", 120),
+            RateLimitWindow: ReadDuration(configuration, "API_RATE_LIMIT_WINDOW", "1m"));
     }
 
     /// <summary>
@@ -105,7 +110,9 @@ public sealed record ApiOptions(
         IssuerBaseUrl: "http://localhost:1",
         IssuerApiKey: "none",
         IssuerSyncInterval: TimeSpan.FromMinutes(5),
-        IssuerSyncEnabled: false);
+        IssuerSyncEnabled: false,
+        RateLimitPermit: 120,
+        RateLimitWindow: TimeSpan.FromMinutes(1));
 
     private static bool IsAbsoluteHttpUrl(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
@@ -148,5 +155,21 @@ public sealed record ApiOptions(
         {
             throw new InvalidOperationException($"{name} is invalid: {exception.Message}", exception);
         }
+    }
+
+    private static int ReadPositiveInt(IConfiguration configuration, string name, int fallback)
+    {
+        var value = Optional(configuration, name);
+        if (value is null)
+        {
+            return fallback;
+        }
+
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed) || parsed <= 0)
+        {
+            throw new InvalidOperationException($"{name} must be a positive integer.");
+        }
+
+        return parsed;
     }
 }

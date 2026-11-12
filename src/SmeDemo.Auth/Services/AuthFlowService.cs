@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using SmeDemo.Auth.Challenges;
@@ -6,6 +6,7 @@ using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Contracts;
 using SmeDemo.Auth.Errors;
 using SmeDemo.Auth.Persistence;
+using SmeDemo.Auth.RateLimiting;
 using SmeDemo.Auth.Security;
 using SmeDemo.Auth.Sms;
 
@@ -36,6 +37,7 @@ public sealed class AuthFlowService
     private readonly JwtTokenIssuer _tokenIssuer;
     private readonly ISmsProvider _smsProvider;
     private readonly AuthOptions _options;
+    private readonly LoginAccountRateLimiter _accountRateLimiter;
     private readonly ILogger<AuthFlowService> _logger;
 
     public AuthFlowService(
@@ -45,6 +47,7 @@ public sealed class AuthFlowService
         JwtTokenIssuer tokenIssuer,
         ISmsProvider smsProvider,
         AuthOptions options,
+        LoginAccountRateLimiter accountRateLimiter,
         ILogger<AuthFlowService> logger)
     {
         _db = db;
@@ -53,6 +56,7 @@ public sealed class AuthFlowService
         _tokenIssuer = tokenIssuer;
         _smsProvider = smsProvider;
         _options = options;
+        _accountRateLimiter = accountRateLimiter;
         _logger = logger;
     }
 
@@ -66,6 +70,18 @@ public sealed class AuthFlowService
         }
 
         var username = request.Username!.Trim();
+
+        // Per-account budget: checked only after the request shape is valid so a
+        // malformed body cannot consume a real account's attempts. The key is
+        // normalized here and never looked up or reflected in the response, so
+        // the 429 does not reveal whether the account exists.
+        if (!_accountRateLimiter.TryAcquire(username.ToLowerInvariant(), out var retryAfter))
+        {
+            _logger.LogWarning("Login rejected by the account rate limit.");
+            return OperationResult<ChallengeResponse>.Failure(
+                ApiProblem.RateLimited("Too many login attempts. Try again later.", retryAfter));
+        }
+
         var user = await FindUserAsync(username, cancellationToken);
 
         // In demo mode only the configured username is accepted. The password is

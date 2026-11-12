@@ -19,7 +19,9 @@ public sealed record AuthOptions(
     TimeSpan JwtTtl,
     string CorsOrigin,
     string KeysPath,
-    string? SmsProviderUrl)
+    string? SmsProviderUrl,
+    AuthRateLimitOptions RateLimits,
+    bool TrustForwardedHeaders)
 {
     public const string DefaultDemoUsername = "demo";
     public const string DefaultDemoPassword = "Demo_Passw0rd!";
@@ -84,7 +86,14 @@ public sealed record AuthOptions(
             JwtTtl: DurationParser.Parse(Read(configuration, "JWT_TTL", "30m")),
             CorsOrigin: Read(configuration, "CORS_ORIGIN", "http://localhost:8080").TrimEnd('/'),
             KeysPath: Read(configuration, "KEYS_PATH", "/keys"),
-            SmsProviderUrl: smsProviderUrl);
+            SmsProviderUrl: smsProviderUrl,
+            RateLimits: AuthRateLimitOptions.FromConfiguration(configuration),
+            // Compose nginx is the only ingress and sets X-Forwarded-For. Off by
+            // default so a direct deployment cannot be spoofed by a client.
+            TrustForwardedHeaders: ReadBool(
+                configuration,
+                "AUTH_TRUST_FORWARDED_HEADERS",
+                fallback: false));
     }
 
     private static string Required(IConfiguration configuration, string name) =>

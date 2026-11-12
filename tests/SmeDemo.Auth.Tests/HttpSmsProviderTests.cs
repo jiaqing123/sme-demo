@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using SmeDemo.Auth.Configuration;
@@ -141,7 +141,9 @@ public sealed class HttpSmsProviderTests
             JwtTtl: TimeSpan.FromMinutes(30),
             CorsOrigin: "http://localhost:8080",
             KeysPath: "unused",
-            SmsProviderUrl: providerUrl);
+            SmsProviderUrl: providerUrl,
+            RateLimits: AuthRateLimitOptions.Default,
+            TrustForwardedHeaders: false);
 
         return new HttpSmsProvider(
             new HttpClient(handler),

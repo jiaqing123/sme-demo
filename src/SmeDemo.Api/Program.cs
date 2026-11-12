@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using SmeDemo.Api.Auth;
@@ -8,6 +9,7 @@ using SmeDemo.Api.Endpoints;
 using SmeDemo.Api.Errors;
 using SmeDemo.Api.Http;
 using SmeDemo.Api.OpenApi;
+using SmeDemo.Api.RateLimiting;
 using SmeDemo.Api.Readiness;
 using SmeDemo.Application;
 using SmeDemo.Application.Abstractions;
@@ -92,6 +94,51 @@ builder.Services.AddAuthorization(authorization =>
 builder.Services.AddSingleton<IAuthorizationHandler, OrgAuthorizationHandler>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, ProblemAuthorizationResultHandler>();
 
+// One fixed-window policy for the /api/v1 group. The partition is the
+// authenticated subject plus the endpoint name, so each endpoint has its own
+// per-user budget and one hot endpoint cannot starve another.
+builder.Services.AddRateLimiter(rateLimiter =>
+{
+    rateLimiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    rateLimiter.AddPolicy(ApiRateLimitPolicies.ApiV1, context =>
+    {
+        var userId = context.User.FindFirst("sub")?.Value ?? "anonymous";
+        var endpoint = context.GetEndpoint()?.Metadata.GetMetadata<IEndpointNameMetadata>()?.EndpointName
+            ?? context.GetEndpoint()?.DisplayName
+            ?? "unknown";
+
+        return RateLimitPartition.GetFixedWindowLimiter(
+            $"{userId}:{endpoint}",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = options.RateLimitPermit,
+                Window = options.RateLimitWindow,
+                QueueLimit = 0,
+                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                AutoReplenishment = true,
+            });
+    });
+
+    rateLimiter.OnRejected = async (context, cancellationToken) =>
+    {
+        if (context.HttpContext.Response.HasStarted)
+        {
+            return;
+        }
+
+        // Use the lease's own hint when available; the configured window keeps
+        // Retry-After numeric and positive for any limiter that omits metadata.
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var fromLease)
+            ? fromLease
+            : options.RateLimitWindow;
+
+        await ProblemResponseWriter.WriteAsync(
+            context.HttpContext,
+            ApiProblem.RateLimited("Too many requests. Try again later.", retryAfter),
+            cancellationToken);
+    };
+});
+
 builder.Services.AddOpenApi(openApi =>
 {
     openApi.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
@@ -166,6 +213,11 @@ app.Use(async (context, next) =>
 
 app.UseAuthentication();
 app.UseAuthorization();
+
+// After authentication/authorization so the partition key is a real subject and
+// an anonymous call still gets its 401 instead of consuming a shared budget.
+// Before endpoint execution so exhaustion happens without running the handler.
+app.UseRateLimiter();
 
 if (app.Environment.IsDevelopment())
 {

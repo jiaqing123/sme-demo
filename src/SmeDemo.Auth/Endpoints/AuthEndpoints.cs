@@ -1,6 +1,7 @@
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Contracts;
 using SmeDemo.Auth.Errors;
+using SmeDemo.Auth.RateLimiting;
 using SmeDemo.Auth.Security;
 using SmeDemo.Auth.Services;
 
@@ -31,11 +32,14 @@ public static class AuthEndpoints
         var auth = app.MapGroup("/auth");
 
         auth.MapPost("/login", LoginAsync)
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(AuthRateLimitPolicies.LoginIp);
         auth.MapPost("/challenges/{challengeId}/verify", VerifyAsync)
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(AuthRateLimitPolicies.VerifyIp);
         auth.MapPost("/challenges/{challengeId}/resend", ResendAsync)
-            .AllowAnonymous();
+            .AllowAnonymous()
+            .RequireRateLimiting(AuthRateLimitPolicies.ResendIp);
 
         // Userinfo validates the bearer token inside UserInfoService rather than
         // through authorization middleware, so it is deliberately anonymous at

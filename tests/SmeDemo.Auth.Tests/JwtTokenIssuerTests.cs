@@ -1,4 +1,4 @@
-﻿using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Persistence;
@@ -122,7 +122,9 @@ public sealed class JwtTokenIssuerTests
         JwtTtl: Ttl,
         CorsOrigin: "http://localhost:8080",
         KeysPath: _keysDirectory,
-        SmsProviderUrl: null);
+        SmsProviderUrl: null,
+        RateLimits: AuthRateLimitOptions.Default,
+        TrustForwardedHeaders: false);
 
     private static string ClaimValue(JsonWebToken token, string claimType) =>
         token.Claims.Single(claim => claim.Type == claimType).Value;

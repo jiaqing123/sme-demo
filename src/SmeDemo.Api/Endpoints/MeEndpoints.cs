@@ -24,7 +24,8 @@ internal static class MeEndpoints
             .WithSummary("Return the caller's identity from the access token.")
             .Produces<MeResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
-            .ProducesProblem(StatusCodes.Status403Forbidden);
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests);
 
         var cards = me.MapGroup(ApiRoutes.Cards).WithTags("Cards");
 
@@ -34,6 +35,7 @@ internal static class MeEndpoints
             .Produces<CardListResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         cards.MapGet("/{cardId:guid}/transactions", GetTransactions)
@@ -44,6 +46,7 @@ internal static class MeEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return app;

@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -7,6 +7,7 @@ using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Contracts;
 using SmeDemo.Auth.Errors;
 using SmeDemo.Auth.Persistence;
+using SmeDemo.Auth.RateLimiting;
 using SmeDemo.Auth.Security;
 using SmeDemo.Auth.Services;
 using SmeDemo.Auth.Sms;
@@ -58,7 +59,9 @@ public sealed class AuthFlowServiceSmsFailureTests
             JwtTtl: TimeSpan.FromMinutes(30),
             CorsOrigin: "http://localhost:8080",
             KeysPath: _keysPath,
-            SmsProviderUrl: "http://sms-mock:8083");
+            SmsProviderUrl: "http://sms-mock:8083",
+            RateLimits: AuthRateLimitOptions.Default,
+            TrustForwardedHeaders: false);
 
         var dbOptions = new DbContextOptionsBuilder<AuthDbContext>()
             .UseInMemoryDatabase($"sme-auth-sms-{Guid.NewGuid():N}")
@@ -78,6 +81,7 @@ public sealed class AuthFlowServiceSmsFailureTests
             new JwtTokenIssuer(_keys, _options, _clock),
             _sms,
             _options,
+            new LoginAccountRateLimiter(_options),
             NullLogger<AuthFlowService>.Instance);
     }
 

@@ -36,7 +36,9 @@ public sealed class AuthEndpointMetadataTests
             JwtTtl: TimeSpan.FromMinutes(15),
             CorsOrigin: "http://localhost:8080",
             KeysPath: Path.Combine(Path.GetTempPath(), "sme-demo-architecture-tests-keys"),
-            SmsProviderUrl: null));
+            SmsProviderUrl: null,
+            RateLimits: AuthRateLimitOptions.Default,
+            TrustForwardedHeaders: false));
 
         // The metadata test never invokes a handler, so these registrations only
         // let Minimal API treat the handler parameters as services rather than

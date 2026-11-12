@@ -44,6 +44,9 @@ public sealed record ApiProblem(
     public static ApiProblem Internal() =>
         new(StatusCodes.Status500InternalServerError, ErrorCodes.Internal, "An unexpected error occurred.");
 
+    public static ApiProblem RateLimited(string message, TimeSpan? retryAfter = null) =>
+        new(StatusCodes.Status429TooManyRequests, ErrorCodes.RateLimited, message, RetryAfter: retryAfter);
+
     public static ApiProblem UpstreamUnavailable() =>
         new(
             StatusCodes.Status503ServiceUnavailable,
