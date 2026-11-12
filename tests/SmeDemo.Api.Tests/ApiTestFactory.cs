@@ -5,13 +5,13 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using SmeDemo.Api.Configuration;
 using SmeDemo.Application.Abstractions;
 using SmeDemo.Application.Errors;
 using SmeDemo.Application.Features.Transactions;
@@ -28,6 +28,8 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     public const string Issuer = "http://auth:8081";
     public const string Audience = "sme-demo-api";
     public const string OrgId = "sme";
+    private const string DefaultDatabaseUrl =
+        "Server=unused;Database=sme_api;User Id=unused;Password=unused;TrustServerCertificate=True";
 
     public static readonly Guid UserId = Guid.Parse("7f3c2a10-0000-4000-8000-000000000001");
     public static readonly Guid OtherUserId = Guid.Parse("7f3c2a10-0000-4000-8000-000000000002");
@@ -41,28 +43,22 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         SetDefaultTimesOnTokenCreation = false,
     };
 
-    static ApiTestFactory()
-    {
-        // ApiOptions reads IConfiguration, which includes environment variables.
-        // ConfigureAppConfiguration runs too late for the top-level Program in the
-        // minimal-hosting test host, so set the values the host needs here.
-        Environment.SetEnvironmentVariable("DATABASE_URL", "Server=unused;Database=sme_api;User Id=unused;Password=unused;TrustServerCertificate=True");
-        Environment.SetEnvironmentVariable("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true");
-        Environment.SetEnvironmentVariable("SEED_ENABLED", "false");
-        Environment.SetEnvironmentVariable("AUTH_METADATA_URL", "http://localhost:1/.well-known/openid-configuration");
-        Environment.SetEnvironmentVariable("AUTH_REQUIRE_HTTPS_METADATA", "false");
-        Environment.SetEnvironmentVariable("JWT_ISSUER", Issuer);
-        Environment.SetEnvironmentVariable("JWT_AUDIENCE", Audience);
-        Environment.SetEnvironmentVariable("ORG_ID", OrgId);
-        Environment.SetEnvironmentVariable("PUBLIC_BASE_URL", "http://localhost:8082");
-        Environment.SetEnvironmentVariable("CORS_ORIGIN", "http://localhost:8080");
-        Environment.SetEnvironmentVariable("ISSUER_SYNC_ENABLED", "false");
-    }
+    private readonly string _databaseUrl;
+    private readonly string _jwtAudience;
 
-    public ApiTestFactory()
+    public ApiTestFactory(string? databaseUrl = null, string? jwtAudience = null)
     {
+        _databaseUrl = databaseUrl ?? DefaultDatabaseUrl;
+        _jwtAudience = jwtAudience ?? Audience;
         SeedData();
     }
+
+    /// <summary>
+    /// The options this host resolved from its own configuration. It proves the
+    /// per-factory settings reach the top-level Program without touching process
+    /// environment variables.
+    /// </summary>
+    public ApiOptions Options => Services.GetRequiredService<ApiOptions>();
 
     public FakeCardRepository Cards { get; } = new();
 
@@ -86,7 +82,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = Issuer,
-            Audience = Audience,
+            Audience = _jwtAudience,
             IssuedAt = issued.UtcDateTime,
             Expires = (expiresAt ?? issued.AddMinutes(30)).UtcDateTime,
             Claims = new Dictionary<string, object>(StringComparer.Ordinal)
@@ -122,7 +118,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = issuer ?? Issuer,
-            Audience = audience ?? Audience,
+            Audience = audience ?? _jwtAudience,
             IssuedAt = issued.UtcDateTime,
             Expires = (expiresAt ?? issued.AddMinutes(30)).UtcDateTime,
             Claims = new Dictionary<string, object>(StringComparer.Ordinal)
@@ -152,23 +148,21 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             logging.AddFilter<CapturingLoggerProvider>(null, LogLevel.Trace);
             logging.AddProvider(Logs);
         });
-        builder.ConfigureAppConfiguration((_, configuration) =>
-        {
-            configuration.AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["DATABASE_URL"] = "Server=unused;Database=sme_api;User Id=unused;Password=unused;TrustServerCertificate=True",
-                ["AZURE_STORAGE_CONNECTION_STRING"] = "UseDevelopmentStorage=true",
-                ["SEED_ENABLED"] = "false",
-                ["AUTH_METADATA_URL"] = "http://localhost:1/.well-known/openid-configuration",
-                ["AUTH_REQUIRE_HTTPS_METADATA"] = "false",
-                ["JWT_ISSUER"] = Issuer,
-                ["JWT_AUDIENCE"] = Audience,
-                ["ORG_ID"] = OrgId,
-                ["PUBLIC_BASE_URL"] = "http://localhost:8082",
-                ["CORS_ORIGIN"] = "http://localhost:8080",
-                ["ISSUER_SYNC_ENABLED"] = "false",
-            });
-        });
+        // Host settings are per factory and visible to builder.Configuration
+        // before the minimal-hosting top-level Program resolves ApiOptions.
+        // ConfigureAppConfiguration is installed after that read, and process
+        // environment variables would leak between factories.
+        builder.UseSetting("DATABASE_URL", _databaseUrl);
+        builder.UseSetting("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true");
+        builder.UseSetting("SEED_ENABLED", "false");
+        builder.UseSetting("AUTH_METADATA_URL", "http://localhost:1/.well-known/openid-configuration");
+        builder.UseSetting("AUTH_REQUIRE_HTTPS_METADATA", "false");
+        builder.UseSetting("JWT_ISSUER", Issuer);
+        builder.UseSetting("JWT_AUDIENCE", _jwtAudience);
+        builder.UseSetting("ORG_ID", OrgId);
+        builder.UseSetting("PUBLIC_BASE_URL", "http://localhost:8082");
+        builder.UseSetting("CORS_ORIGIN", "http://localhost:8080");
+        builder.UseSetting("ISSUER_SYNC_ENABLED", "false");
 
         builder.ConfigureTestServices(services =>
         {
@@ -189,7 +183,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
                 options.Configuration = new OpenIdConnectConfiguration { Issuer = Issuer };
                 options.Configuration.SigningKeys.Add(SigningKey);
                 options.TokenValidationParameters.ValidIssuer = Issuer;
-                options.TokenValidationParameters.ValidAudience = Audience;
+                options.TokenValidationParameters.ValidAudience = _jwtAudience;
                 options.TokenValidationParameters.ValidateIssuer = true;
                 options.TokenValidationParameters.ValidateAudience = true;
                 options.TokenValidationParameters.ValidateLifetime = true;
