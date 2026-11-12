@@ -3,6 +3,7 @@ using Azure.Storage.Blobs;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SmeDemo.Application.Abstractions;
+using SmeDemo.Infrastructure.Health;
 using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Persistence;
 using SmeDemo.Infrastructure.Storage;
@@ -39,6 +40,13 @@ public static class DependencyInjection
         services.AddScoped<ICardRepository, EfCardRepository>();
         services.AddSingleton<ITransactionStore, TableTransactionStore>();
         services.AddSingleton<IBlobStore, BlobCardArtStore>();
+
+        // Readiness probes for the adapters this layer owns. The database probe
+        // is scoped with AppDbContext; the blob probe borrows the singleton
+        // client. The API composes them with the auth-metadata probe, which
+        // lives outside this assembly because it is an HTTP dependency.
+        services.AddScoped<IReadinessProbe, DatabaseReadinessProbe>();
+        services.AddScoped<IReadinessProbe, BlobStorageReadinessProbe>();
 
         if (options.IssuerSyncEnabled)
         {

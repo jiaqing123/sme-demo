@@ -1,7 +1,8 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -69,6 +70,16 @@ public sealed class EndpointContractTests
         var health = endpoints.Single(endpoint => endpoint.RoutePattern.RawText == "/healthz");
         Assert.IsNotNull(health.Metadata.GetMetadata<IAllowAnonymous>(), "/healthz must be anonymous.");
         Assert.IsNull(health.Metadata.GetMetadata<IAuthorizeData>(), "/healthz must not require authorization.");
+
+        var readiness = endpoints.Single(endpoint => endpoint.RoutePattern.RawText == "/readyz");
+        Assert.IsNotNull(readiness.Metadata.GetMetadata<IAllowAnonymous>(), "/readyz must be anonymous.");
+        Assert.IsNull(readiness.Metadata.GetMetadata<IAuthorizeData>(), "/readyz must not require authorization.");
+        CollectionAssert.AreEquivalent(
+            new[] { StatusCodes.Status200OK, StatusCodes.Status503ServiceUnavailable },
+            readiness.Metadata.OfType<IProducesResponseTypeMetadata>()
+                .Select(metadata => metadata.StatusCode)
+                .ToArray(),
+            "/readyz must document both the ready and degraded responses.");
     }
 
     [TestMethod]

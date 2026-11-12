@@ -269,11 +269,14 @@ services:
         # local feed in that case (acceptance 11).
         condition: service_started
     healthcheck:
+      # Readiness, not liveness: mssql, azurite and auth are healthy before this
+      # service starts, so a 200 here means the API can actually serve traffic.
+      # The probe itself answers within 5s; allow headroom for a slow first run.
       test:
         - "CMD-SHELL"
-        - "curl -fsS http://localhost:8082/healthz || exit 1"
+        - "curl -fsS http://localhost:8082/readyz || exit 1"
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 18
       start_period: 60s
     networks:

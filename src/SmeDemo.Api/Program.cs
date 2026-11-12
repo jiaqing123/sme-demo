@@ -8,7 +8,9 @@ using SmeDemo.Api.Endpoints;
 using SmeDemo.Api.Errors;
 using SmeDemo.Api.Http;
 using SmeDemo.Api.OpenApi;
+using SmeDemo.Api.Readiness;
 using SmeDemo.Application;
+using SmeDemo.Application.Abstractions;
 using SmeDemo.Infrastructure;
 using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Seeding;
@@ -46,6 +48,20 @@ builder.Services.AddInfrastructure(new InfrastructureOptions(
     options.IssuerApiKey,
     options.IssuerSyncInterval,
     options.IssuerSyncEnabled));
+
+// Readiness: the database and blob probes are registered by AddInfrastructure
+// because they own those adapters. The auth-metadata probe is composed here
+// because it needs an HTTP client, and the aggregate service keeps endpoint
+// code free of dependency health logic.
+builder.Services.AddHttpClient<AuthMetadataReadinessProbe>(client =>
+{
+    // Well inside the aggregate 5s budget: a stalled metadata fetch must show
+    // up as a degraded check, not as a hung probe.
+    client.Timeout = TimeSpan.FromSeconds(3);
+});
+builder.Services.AddScoped<IReadinessProbe>(provider =>
+    provider.GetRequiredService<AuthMetadataReadinessProbe>());
+builder.Services.AddScoped<IReadinessService, ReadinessService>();
 
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();

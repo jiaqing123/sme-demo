@@ -44,16 +44,20 @@ public sealed class OpenApiContractTests
                 $"{route} must require the Bearer scheme.");
         }
 
-        // The liveness probe is anonymous, so the document must not claim a
-        // token is needed. An empty security array is dropped by the writer, so
-        // absence is the correct representation.
-        var health = GetOperation(root, "/healthz");
-        Assert.IsFalse(
-            health.TryGetProperty("security", out _),
-            "/healthz must not carry a security requirement.");
+        // Both probes are anonymous, so the document must not claim a token is
+        // needed. An empty security array is dropped by the writer, so absence
+        // is the correct representation.
+        foreach (var probeRoute in new[] { "/healthz", "/readyz" })
+        {
+            var probe = GetOperation(root, probeRoute);
+            Assert.IsFalse(
+                probe.TryGetProperty("security", out _),
+                $"{probeRoute} must not carry a security requirement.");
+        }
+
         Assert.IsFalse(
             root.TryGetProperty("security", out _),
-            "The document must not apply a global requirement; it would also cover /healthz.");
+            "The document must not apply a global requirement; it would also cover the anonymous probes.");
     }
 
     [TestMethod]

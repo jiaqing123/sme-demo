@@ -3,7 +3,7 @@
 # End-to-end smoke test for the Compose stack.
 #
 # Run it after `docker compose up -d` (the minimal set in the CI compose-smoke
-# job) once auth and api are healthy:
+# job) once auth is live and the api reports ready:
 #
 #   bash tools/smoke/compose-smoke.sh
 #
@@ -82,30 +82,33 @@ request() {
     curl "${args[@]}" 2>/dev/null || true
 }
 
-wait_for_health() {
+wait_for_probe() {
     local name="$1"
     local base_url="$2"
+    local path="$3"
     local attempt code
 
     for ((attempt = 1; attempt <= HEALTH_ATTEMPTS; attempt++)); do
-        code="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' \
-            "$base_url/healthz" 2>/dev/null || true)"
+        code="$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+            "$base_url$path" 2>/dev/null || true)"
         if [ "$code" = "200" ]; then
-            pass "$name is healthy at $base_url/healthz (attempt $attempt)"
+            pass "$name returned 200 from $base_url$path (attempt $attempt)"
             return 0
         fi
         sleep "$HEALTH_INTERVAL_SECONDS"
     done
 
-    fail "$name did not return 200 from $base_url/healthz after $HEALTH_ATTEMPTS attempts"
+    fail "$name did not return 200 from $base_url$path after $HEALTH_ATTEMPTS attempts"
     return 1
 }
 
 printf 'Compose smoke test: auth=%s api=%s org=%s\n' \
     "$AUTH_BASE_URL" "$API_BASE_URL" "$EXPECTED_ORG"
 
-wait_for_health "auth" "$AUTH_BASE_URL"
-wait_for_health "api" "$API_BASE_URL"
+# Auth has only liveness to wait on; the API must prove its dependencies are
+# reachable before the functional checks run.
+wait_for_probe "auth liveness" "$AUTH_BASE_URL" "/healthz"
+wait_for_probe "api readiness" "$API_BASE_URL" "/readyz"
 
 login_body="$(
     DEMO_USERNAME="$DEMO_USERNAME" DEMO_PASSWORD="$DEMO_PASSWORD" python3 - <<'PY'

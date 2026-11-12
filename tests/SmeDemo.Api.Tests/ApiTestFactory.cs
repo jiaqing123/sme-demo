@@ -67,6 +67,25 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     public FakeBlobStore Blobs { get; } = new();
 
     /// <summary>
+    /// Deterministic readiness probes. The real probes would reach the test
+    /// host's inert SQL Server, Azurite, and auth metadata URL, so
+    /// <see cref="ConfigureWebHost"/> replaces them for every factory.
+    /// </summary>
+    public FakeReadinessProbe DatabaseProbe { get; } = new("database");
+
+    public FakeReadinessProbe BlobStorageProbe { get; } = new("blob-storage");
+
+    public FakeReadinessProbe AuthMetadataProbe { get; } = new("auth-metadata");
+
+    /// <summary>Sets every dependency's readiness in one call.</summary>
+    public void SetReadiness(bool ready)
+    {
+        DatabaseProbe.Ready = ready;
+        BlobStorageProbe.Ready = ready;
+        AuthMetadataProbe.Ready = ready;
+    }
+
+    /// <summary>
     /// Captures every formatted log message (and its template) the API emits, so
     /// the security tests can prove no token, OTP, phone number, or password is
     /// ever written to the log.
@@ -169,10 +188,14 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             services.RemoveAll<ICardRepository>();
             services.RemoveAll<ITransactionStore>();
             services.RemoveAll<IBlobStore>();
+            services.RemoveAll<IReadinessProbe>();
 
             services.AddSingleton<ICardRepository>(Cards);
             services.AddSingleton<ITransactionStore>(Transactions);
             services.AddSingleton<IBlobStore>(Blobs);
+            services.AddSingleton<IReadinessProbe>(DatabaseProbe);
+            services.AddSingleton<IReadinessProbe>(BlobStorageProbe);
+            services.AddSingleton<IReadinessProbe>(AuthMetadataProbe);
 
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {
@@ -342,6 +365,16 @@ public sealed class FakeBlobStore : IBlobStore
         string contentType,
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("The API does not upload artwork at run time.");
+}
+
+public sealed class FakeReadinessProbe(string name) : IReadinessProbe
+{
+    public string Name { get; } = name;
+
+    /// <summary>Toggle the simulated dependency state for the next probe call.</summary>
+    public bool Ready { get; set; } = true;
+
+    public Task<bool> CheckAsync(CancellationToken cancellationToken) => Task.FromResult(Ready);
 }
 
 /// <summary>
