@@ -1,4 +1,4 @@
-using SmeDemo.Infrastructure.Configuration;
+﻿using SmeDemo.Infrastructure.Configuration;
 
 namespace SmeDemo.Api.Configuration;
 
@@ -90,7 +90,7 @@ public sealed record ApiOptions(
     /// alone. Seed and issuer-sync workers stay off in that run.
     /// </summary>
     public static ApiOptions ForOpenApiDocumentGeneration() => new(
-        DatabaseUrl: "Server=openapi-generation;Database=none;User Id=none;Password=none;TrustServerCertificate=True",
+        DatabaseUrl: "Server=openapi-generation;Database=none;User Id=none;TrustServerCertificate=True",
         OrgId: "sme",
         CorsOrigin: "http://localhost:8080",
         AuthMetadataUrl: "https://localhost:1/.well-known/openid-configuration",
