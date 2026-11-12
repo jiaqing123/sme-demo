@@ -340,11 +340,35 @@ public sealed class FakeCardRepository : ICardRepository
 {
     public List<Card> Cards { get; } = [];
 
-    public Task<IReadOnlyList<Card>> GetByUserAsync(Guid userId, CancellationToken cancellationToken) =>
-        Task.FromResult<IReadOnlyList<Card>>(Cards.Where(card => card.UserId == userId).ToArray());
+    /// <summary>
+    /// When set, every read throws this plain exception. The status-code matrix
+    /// uses it to reach the unhandled-failure (500) path without a real
+    /// database fault.
+    /// </summary>
+    public Exception? Failure { get; set; }
 
-    public Task<Card?> GetByIdAsync(Guid cardId, CancellationToken cancellationToken) =>
-        Task.FromResult(Cards.SingleOrDefault(card => card.Id == cardId));
+    public Task<IReadOnlyList<Card>> GetByUserAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        ThrowIfConfigured();
+
+        return Task.FromResult<IReadOnlyList<Card>>(
+            Cards.Where(card => card.UserId == userId).ToArray());
+    }
+
+    public Task<Card?> GetByIdAsync(Guid cardId, CancellationToken cancellationToken)
+    {
+        ThrowIfConfigured();
+
+        return Task.FromResult(Cards.SingleOrDefault(card => card.Id == cardId));
+    }
+
+    private void ThrowIfConfigured()
+    {
+        if (Failure is { } failure)
+        {
+            throw failure;
+        }
+    }
 }
 
 public sealed class FakeTransactionStore : ITransactionStore

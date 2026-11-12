@@ -154,8 +154,13 @@ public sealed class AuthFlowService
                 return OperationResult<TokenResponse>.Failure(
                     ApiProblem.Unauthenticated("The verification code is incorrect."));
             case ChallengeVerificationOutcome.TooManyAttempts:
+                // The challenge is destroyed, so a fresh login is allowed
+                // immediately; the short hint only keeps a client from hot
+                // looping on the dead challenge. Every 429 carries Retry-After.
                 return OperationResult<TokenResponse>.Failure(
-                    ApiProblem.RateLimited("Too many verification attempts. Request a new code."));
+                    ApiProblem.RateLimited(
+                        "Too many verification attempts. Request a new code.",
+                        TimeSpan.FromSeconds(1)));
             case ChallengeVerificationOutcome.NotFound:
             case ChallengeVerificationOutcome.Expired:
             default:

@@ -180,9 +180,21 @@ public sealed class RecordingSmsProvider : ISmsProvider
 
     public SmsDeliveryException? Failure { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="Send"/> throws this plain exception instead of a
+    /// <see cref="SmsDeliveryException"/>. The status-code matrix uses it to
+    /// reach the unhandled-failure (500) path.
+    /// </summary>
+    public Exception? ThrowOnSend { get; set; }
+
     public Task<string> Send(string phoneNumber, string message, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+
+        if (ThrowOnSend is { } throwOnSend)
+        {
+            throw throwOnSend;
+        }
 
         if (Failure is { } failure)
         {
