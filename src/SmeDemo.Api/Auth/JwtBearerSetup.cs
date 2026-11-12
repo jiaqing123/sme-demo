@@ -54,12 +54,10 @@ public static class JwtBearerSetup
                     _ => ApiProblem.Unauthenticated("A bearer token is required."),
                 };
 
-                context.Response.StatusCode = problem.StatusCode;
-                await context.Response.WriteAsJsonAsync(
-                    problem.ToProblemDetails(),
-                    options: null,
-                    contentType: "application/problem+json",
-                    cancellationToken: context.HttpContext.RequestAborted);
+                await ProblemResponseWriter.WriteAsync(
+                    context.HttpContext,
+                    problem,
+                    context.HttpContext.RequestAborted);
             },
         };
     }

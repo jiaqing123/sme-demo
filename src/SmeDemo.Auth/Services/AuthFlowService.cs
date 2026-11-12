@@ -182,7 +182,8 @@ public sealed class AuthFlowService
             case ChallengeResendOutcome.Cooldown:
                 return OperationResult<ChallengeResponse>.Failure(
                     ApiProblem.RateLimited(
-                        $"Wait {Math.Ceiling(result.RetryAfter.TotalSeconds)} seconds before resending."));
+                        $"Wait {Math.Ceiling(result.RetryAfter.TotalSeconds)} seconds before resending.",
+                        result.RetryAfter));
             case ChallengeResendOutcome.NotFound:
             case ChallengeResendOutcome.Expired:
             default:

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.IdentityModel.Tokens;
 
 namespace SmeDemo.Api.Tests;
@@ -124,7 +125,11 @@ public sealed class SecurityAbuseCaseTests
             ProblemJson,
             unknown.MediaType,
             $"An unknown card id must use the problem+json envelope. Body: {unknown.Body}");
-        AssertStandardProblemEnvelope(unknown.Body, HttpStatusCode.NotFound, "NOT_FOUND");
+        AssertStandardProblemEnvelope(
+            unknown.Body,
+            HttpStatusCode.NotFound,
+            "NOT_FOUND",
+            $"/api/v1/me/cards/{UnknownCardId}/transactions");
         AssertNoObjectExistenceLeak(unknown.Body, UnknownCardId, "unknown card transactions");
         AssertNoStackTrace(unknown.Body, "unknown card transactions");
     }
@@ -265,7 +270,11 @@ public sealed class SecurityAbuseCaseTests
             ProblemJson,
             unknownRoute.MediaType,
             $"An unknown route must use the problem+json envelope. Body: {unknownRoute.Body}");
-        AssertStandardProblemEnvelope(unknownRoute.Body, HttpStatusCode.NotFound, "NOT_FOUND");
+        AssertStandardProblemEnvelope(
+            unknownRoute.Body,
+            HttpStatusCode.NotFound,
+            "NOT_FOUND",
+            "/api/v1/does-not-exist");
         AssertNoStackTrace(unknownRoute.Body, "unknown route");
     }
 
@@ -397,11 +406,39 @@ public sealed class SecurityAbuseCaseTests
 
         using var response = await client.SendAsync(request);
         var body = await response.Content.ReadAsStringAsync();
-        return new ErrorResponse(
+        var error = new ErrorResponse(
             response.StatusCode,
             response.Content.Headers.ContentType?.MediaType,
             body,
-            TryReadErrorCode(body));
+            TryReadErrorCode(body),
+            request.RequestUri?.AbsolutePath ?? path);
+
+        // Every problem response that a security test inspects must carry the
+        // complete envelope, not just the status and error.code.
+        if (string.Equals(error.MediaType, ProblemJson, StringComparison.Ordinal))
+        {
+            AssertProblemEnvelope(error);
+        }
+
+        return error;
+    }
+
+    private static void AssertProblemEnvelope(ErrorResponse error)
+    {
+        using var document = JsonDocument.Parse(error.Body);
+        var root = document.RootElement;
+
+        Assert.AreEqual(
+            (int)error.Status,
+            root.GetProperty("status").GetInt32(),
+            $"The problem status must match the HTTP status. Body: {error.Body}");
+        Assert.AreEqual(
+            error.Path,
+            root.GetProperty("instance").GetString(),
+            $"The problem instance must be the request path. Body: {error.Body}");
+        Assert.IsFalse(
+            string.IsNullOrWhiteSpace(root.GetProperty("traceId").GetString()),
+            $"The problem envelope must carry a non-empty traceId. Body: {error.Body}");
     }
 
     private static string? TryReadErrorCode(string body)
@@ -428,7 +465,8 @@ public sealed class SecurityAbuseCaseTests
     private static void AssertStandardProblemEnvelope(
         string body,
         HttpStatusCode expectedStatus,
-        string expectedCode)
+        string expectedCode,
+        string expectedInstance)
     {
         using var document = JsonDocument.Parse(body);
         var root = document.RootElement;
@@ -448,6 +486,13 @@ public sealed class SecurityAbuseCaseTests
             string.IsNullOrWhiteSpace(root.GetProperty("detail").GetString()),
             $"The problem envelope must carry a detail message. Body: {body}");
         Assert.AreEqual(
+            expectedInstance,
+            root.GetProperty("instance").GetString(),
+            $"The problem instance must be the request path. Body: {body}");
+        Assert.IsFalse(
+            string.IsNullOrWhiteSpace(root.GetProperty("traceId").GetString()),
+            $"The problem envelope must carry a non-empty traceId. Body: {body}");
+        Assert.AreEqual(
             expectedCode,
             root.GetProperty("error").GetProperty("code").GetString(),
             $"The problem envelope must carry error.code {expectedCode}. Body: {body}");
@@ -462,16 +507,29 @@ public sealed class SecurityAbuseCaseTests
         // object, 404 for an unknown id) but forbids the body from adding an
         // existence signal of its own. Both messages may name "card" as the
         // resource type; neither may echo the identifier, artwork blob name, or
-        // another card's last four digits.
+        // another card's last four digits. `instance` is exempt because the
+        // envelope contract requires it to repeat the caller's own request path.
+        var scanned = WithoutInstance(body);
         Assert.IsFalse(
-            body.Contains(requestedCardId.ToString(), StringComparison.OrdinalIgnoreCase),
+            scanned.Contains(requestedCardId.ToString(), StringComparison.OrdinalIgnoreCase),
             $"{scenario}: the response must not echo the requested card id. Body: {body}");
         Assert.IsFalse(
-            body.Contains("other.svg", StringComparison.OrdinalIgnoreCase),
+            scanned.Contains("other.svg", StringComparison.OrdinalIgnoreCase),
             $"{scenario}: the response must not expose the artwork blob name. Body: {body}");
         Assert.IsFalse(
-            body.Contains("9999", StringComparison.Ordinal),
+            scanned.Contains("9999", StringComparison.Ordinal),
             $"{scenario}: the response must not expose another card's last four digits. Body: {body}");
+    }
+
+    private static string WithoutInstance(string body)
+    {
+        if (JsonNode.Parse(body) is not JsonObject root)
+        {
+            return body;
+        }
+
+        root.Remove("instance");
+        return root.ToJsonString();
     }
 
     private static void AssertNoStackTrace(string body, string scenario)
@@ -512,5 +570,6 @@ public sealed class SecurityAbuseCaseTests
         HttpStatusCode Status,
         string? MediaType,
         string Body,
-        string? Code);
+        string? Code,
+        string Path);
 }

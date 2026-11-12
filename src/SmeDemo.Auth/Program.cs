@@ -10,6 +10,16 @@ using SmeDemo.Auth.Services;
 using SmeDemo.Auth.Sms;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Development already validates the container at build time; apply the same
+// fail-fast checks in every environment so a Production-only dependency error
+// cannot survive until the first request.
+builder.Host.UseDefaultServiceProvider(provider =>
+{
+    provider.ValidateOnBuild = true;
+    provider.ValidateScopes = true;
+});
+
 var options = AuthOptions.FromEnvironment();
 
 // Build the signing key at start-up so a bad key volume fails the container,
@@ -48,26 +58,29 @@ var app = builder.Build();
 
 app.UseExceptionHandler();
 
-// Minimal APIs reject malformed JSON with an empty 400 before the exception
-// handler sees it. Give that response the same VALIDATION_ERROR envelope as a
-// validator failure.
+// Minimal APIs and routing reject malformed JSON, an unknown route, or an
+// unsupported verb with an empty body before the exception handler sees it.
+// Give those responses the same envelope as a validator failure.
 app.UseStatusCodePages(async statusCodeContext =>
 {
-    var response = statusCodeContext.HttpContext.Response;
-    if (response.StatusCode != StatusCodes.Status400BadRequest)
+    var context = statusCodeContext.HttpContext;
+    var problem = context.Response.StatusCode switch
+    {
+        StatusCodes.Status400BadRequest => ApiProblem.Validation(new Dictionary<string, string[]>
+        {
+            ["body"] = ["The request body could not be read."],
+        }),
+        StatusCodes.Status404NotFound => ApiProblem.NotFound("The requested resource was not found."),
+        StatusCodes.Status405MethodNotAllowed => ApiProblem.MethodNotAllowed(),
+        _ => null,
+    };
+
+    if (problem is null)
     {
         return;
     }
 
-    var problem = ApiProblem.Validation(new Dictionary<string, string[]>
-    {
-        ["body"] = ["The request body could not be read."],
-    });
-
-    await response.WriteAsJsonAsync(
-        problem.ToProblemDetails(),
-        options: null,
-        contentType: "application/problem+json");
+    await ProblemResponseWriter.WriteAsync(context, problem);
 });
 
 app.UseCors();

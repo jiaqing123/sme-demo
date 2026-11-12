@@ -19,9 +19,11 @@ public sealed class ProblemAuthorizationResultHandler : IAuthorizationMiddleware
         AuthorizationPolicy policy,
         PolicyAuthorizationResult authorizeResult)
     {
-        // The fallback policy also runs when routing matched nothing. Keep the
-        // pre-refactor 404 for unknown routes instead of challenging them.
-        if (context.GetEndpoint() is null)
+        // The fallback policy also runs when routing matched nothing, and when
+        // routing matched a path with the wrong verb. Neither case is an
+        // authentication failure: let the request continue so the status-code
+        // pages middleware renders the 404/405 envelope instead of a 401.
+        if (context.GetEndpoint() is null || IsMethodNotAllowedEndpoint(context.GetEndpoint()))
         {
             await next(context);
             return;
@@ -30,15 +32,21 @@ public sealed class ProblemAuthorizationResultHandler : IAuthorizationMiddleware
         if (authorizeResult.Forbidden)
         {
             var problem = ApiProblem.Forbidden("The token does not belong to this organisation.");
-            context.Response.StatusCode = problem.StatusCode;
-            await context.Response.WriteAsJsonAsync(
-                problem.ToProblemDetails(),
-                options: null,
-                contentType: "application/problem+json",
-                cancellationToken: context.RequestAborted);
+            await ProblemResponseWriter.WriteAsync(context, problem, context.RequestAborted);
             return;
         }
 
         await _default.HandleAsync(next, context, policy, authorizeResult);
     }
+
+    /// <summary>
+    /// The matcher marks a verb mismatch with a bare framework endpoint whose
+    /// display name is fixed by <c>HttpMethodMatcherPolicy</c>. It is the only
+    /// endpoint that reaches authorization this way, and skipping its challenge
+    /// does not weaken default-deny: every real endpoint still carries its own
+    /// authorization metadata and never matches this marker.
+    /// </summary>
+    private static bool IsMethodNotAllowedEndpoint(Endpoint? endpoint) =>
+        endpoint is not null &&
+        string.Equals(endpoint.DisplayName, "405 HTTP Method Not Supported", StringComparison.Ordinal);
 }

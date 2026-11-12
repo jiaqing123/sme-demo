@@ -34,12 +34,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             _logger.LogWarning(exception, "Rejected request to {Path}.", httpContext.Request.Path);
         }
 
-        httpContext.Response.StatusCode = problem.StatusCode;
-        await httpContext.Response.WriteAsJsonAsync(
-            problem.ToProblemDetails(),
-            options: null,
-            contentType: "application/problem+json",
-            cancellationToken: cancellationToken);
+        await ProblemResponseWriter.WriteAsync(httpContext, problem, cancellationToken);
 
         return true;
     }

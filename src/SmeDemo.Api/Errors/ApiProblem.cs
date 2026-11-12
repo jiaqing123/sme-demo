@@ -9,7 +9,8 @@ public sealed record ApiProblem(
     int StatusCode,
     string Code,
     string Message,
-    IReadOnlyDictionary<string, string[]>? Errors = null)
+    IReadOnlyDictionary<string, string[]>? Errors = null,
+    TimeSpan? RetryAfter = null)
 {
     public static ApiProblem Validation(IReadOnlyDictionary<string, string[]> errors) =>
         new(StatusCodes.Status400BadRequest, ErrorCodes.ValidationError, "One or more validation errors occurred.", errors);
@@ -29,6 +30,17 @@ public sealed record ApiProblem(
     public static ApiProblem NotFound(string message) =>
         new(StatusCodes.Status404NotFound, ErrorCodes.NotFound, message);
 
+    /// <summary>
+    /// A routing method mismatch. This is deliberately a 405, not a 401: the
+    /// caller reached a matching path, so the fallback authorization policy must
+    /// not turn "wrong verb" into "missing token".
+    /// </summary>
+    public static ApiProblem MethodNotAllowed() =>
+        new(
+            StatusCodes.Status405MethodNotAllowed,
+            ErrorCodes.MethodNotAllowed,
+            "The HTTP method is not supported for this resource.");
+
     public static ApiProblem Internal() =>
         new(StatusCodes.Status500InternalServerError, ErrorCodes.Internal, "An unexpected error occurred.");
 
@@ -36,5 +48,6 @@ public sealed record ApiProblem(
         new(
             StatusCodes.Status503ServiceUnavailable,
             ErrorCodes.UpstreamUnavailable,
-            "A required store is unavailable. Try again shortly.");
+            "A required store is unavailable. Try again shortly.",
+            RetryAfter: TimeSpan.FromSeconds(5));
 }
