@@ -32,11 +32,17 @@ internal static class CardEndpoints
         Guid cardId,
         CurrentUser user,
         IQueryHandler<GetCardArtQuery, CardArtResult> handler,
+        HttpResponse response,
         CancellationToken ct)
     {
         var art = await handler.HandleAsync(
             new GetCardArtQuery(user.UserId, cardId),
             ct);
+
+        // An SVG opened directly is a document that can carry script. The
+        // sandbox directive denies it active content while leaving the response
+        // streamable as artwork; only the success path needs the header.
+        response.Headers["Content-Security-Policy"] = "default-src 'none'; sandbox";
 
         return TypedResults.Stream(art.Content, art.ContentType);
     }

@@ -236,6 +236,25 @@ public sealed class AuthHttpContractTests
             "/auth/login");
     }
 
+    [TestMethod]
+    public async Task SecurityHeaders_NosniffIsPresentOnHealthAndAuthErrors()
+    {
+        using var health = await _client.GetAsync("/healthz");
+        Assert.AreEqual(HttpStatusCode.OK, health.StatusCode);
+        AssertNosniff(health, "/healthz");
+
+        using var rejected = await LoginAsync("no-such-user", "not-the-password");
+        Assert.AreEqual(HttpStatusCode.Unauthorized, rejected.StatusCode);
+        AssertNosniff(rejected, "401 /auth/login");
+
+        using var unknown = await _client.GetAsync("/auth/no-such-route");
+        Assert.AreEqual(HttpStatusCode.NotFound, unknown.StatusCode);
+        AssertNosniff(unknown, "404 auth route");
+
+        // The existing no-store contract for /auth responses is unchanged.
+        Assert.AreEqual("no-store", rejected.Headers.CacheControl?.ToString());
+    }
+
     private async Task<HttpResponseMessage> LoginAsync(string username, string password) =>
         await _client.PostAsJsonAsync("/auth/login", new { username, password });
 
@@ -287,6 +306,17 @@ public sealed class AuthHttpContractTests
         Assert.AreEqual(expectedPath, problem.Instance, problem.Body);
         Assert.IsFalse(string.IsNullOrWhiteSpace(problem.TraceId), problem.Body);
         Assert.IsFalse(string.IsNullOrWhiteSpace(problem.Message), problem.Body);
+    }
+
+    private static void AssertNosniff(HttpResponseMessage response, string scenario)
+    {
+        Assert.IsTrue(
+            response.Headers.TryGetValues("X-Content-Type-Options", out var values),
+            $"{scenario}: the response must carry X-Content-Type-Options.");
+        Assert.AreEqual(
+            "nosniff",
+            values!.Single(),
+            $"{scenario}: the response must disable MIME sniffing.");
     }
 
     /// <summary>

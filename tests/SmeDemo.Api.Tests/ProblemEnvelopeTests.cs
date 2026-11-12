@@ -88,6 +88,50 @@ public sealed class ProblemEnvelopeTests
             $"A 503 must tell the caller how long to wait. Body: {body}");
     }
 
+    [TestMethod]
+    public async Task MetadataFetchFailure_Returns503UpstreamUnavailable_NotA401InvalidToken()
+    {
+        // This factory leaves the production bearer configuration in place and
+        // points it at a closed loopback port. A validly signed token must still
+        // not be reported as invalid when the authority could not be reached.
+        using var factory = new ApiTestFactory(unreachableAuthMetadata: true);
+        using var client = factory.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/me");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", factory.CreateToken());
+
+        using var response = await client.SendAsync(request);
+        var body = await response.Content.ReadAsStringAsync();
+        var error = new ErrorResponse(
+            response.StatusCode,
+            response.Content.Headers.ContentType?.MediaType,
+            body,
+            request.RequestUri!.AbsolutePath);
+
+        AssertProblemEnvelope(
+            error,
+            HttpStatusCode.ServiceUnavailable,
+            "UPSTREAM_UNAVAILABLE",
+            "unreachable auth metadata");
+        Assert.AreEqual(
+            TimeSpan.FromSeconds(5),
+            response.Headers.RetryAfter?.Delta,
+            $"A metadata-fetch failure must carry the standard retry hint. Body: {body}");
+    }
+
+    [TestMethod]
+    public async Task InvalidToken_OnAHealthyMetadataHost_StillReturns401InvalidToken()
+    {
+        using var factory = new ApiTestFactory();
+        using var client = factory.CreateClient();
+
+        // Regression guard: signature and format failures must keep the 401
+        // mapping and never be reclassified as an upstream outage.
+        var error = await SendAsync(client, HttpMethod.Get, "/api/v1/me", "not-a-jwt");
+
+        AssertProblemEnvelope(error, HttpStatusCode.Unauthorized, "INVALID_TOKEN", "malformed token");
+    }
+
     private static async Task<ErrorResponse> SendAsync(
         HttpClient client,
         HttpMethod method,

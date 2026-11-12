@@ -160,6 +160,20 @@ if (options.IssuerSyncEnabled)
 
 var app = builder.Build();
 
+// Stop browsers and proxies from MIME-sniffing any API response. OnStarting
+// runs after the exception handler has reset a failed response, so 4xx/5xx
+// envelopes carry the header just like successful payloads.
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return Task.CompletedTask;
+    });
+
+    await next();
+});
+
 app.UseExceptionHandler();
 
 // Minimal APIs and routing reject malformed JSON, an unknown route, or an

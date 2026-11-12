@@ -118,6 +118,20 @@ builder.Services.AddProblemDetails();
 
 var app = builder.Build();
 
+// Every auth response (discovery, JWKS, health, login and the shared error
+// envelope) must reject MIME sniffing. OnStarting keeps the header on a
+// response the exception handler has reset, and does not disturb no-store.
+app.Use(async (context, next) =>
+{
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+        return Task.CompletedTask;
+    });
+
+    await next();
+});
+
 app.UseExceptionHandler();
 
 if (options.TrustForwardedHeaders)

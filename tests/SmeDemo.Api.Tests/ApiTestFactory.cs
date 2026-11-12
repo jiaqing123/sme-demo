@@ -31,6 +31,13 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     private const string DefaultDatabaseUrl =
         "Server=unused;Database=sme_api;User Id=unused;Password=unused;TrustServerCertificate=True";
 
+    /// <summary>
+    /// Port 1 on loopback has no listener, so the metadata fetch fails at the
+    /// transport layer instead of reaching a signed test configuration.
+    /// </summary>
+    private const string UnreachableMetadataUrl =
+        "http://127.0.0.1:1/.well-known/openid-configuration";
+
     public static readonly Guid UserId = Guid.Parse("7f3c2a10-0000-4000-8000-000000000001");
     public static readonly Guid OtherUserId = Guid.Parse("7f3c2a10-0000-4000-8000-000000000002");
 
@@ -47,17 +54,20 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     private readonly string _jwtAudience;
     private readonly int? _rateLimitPermit;
     private readonly TimeSpan? _rateLimitWindow;
+    private readonly bool _unreachableAuthMetadata;
 
     public ApiTestFactory(
         string? databaseUrl = null,
         string? jwtAudience = null,
         int? rateLimitPermit = null,
-        TimeSpan? rateLimitWindow = null)
+        TimeSpan? rateLimitWindow = null,
+        bool unreachableAuthMetadata = false)
     {
         _databaseUrl = databaseUrl ?? DefaultDatabaseUrl;
         _jwtAudience = jwtAudience ?? Audience;
         _rateLimitPermit = rateLimitPermit;
         _rateLimitWindow = rateLimitWindow;
+        _unreachableAuthMetadata = unreachableAuthMetadata;
         SeedData();
     }
 
@@ -182,7 +192,9 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
         builder.UseSetting("DATABASE_URL", _databaseUrl);
         builder.UseSetting("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true");
         builder.UseSetting("SEED_ENABLED", "false");
-        builder.UseSetting("AUTH_METADATA_URL", "http://localhost:1/.well-known/openid-configuration");
+        builder.UseSetting(
+            "AUTH_METADATA_URL",
+            _unreachableAuthMetadata ? UnreachableMetadataUrl : "http://localhost:1/.well-known/openid-configuration");
         builder.UseSetting("AUTH_REQUIRE_HTTPS_METADATA", "false");
         builder.UseSetting("JWT_ISSUER", Issuer);
         builder.UseSetting("JWT_AUDIENCE", _jwtAudience);
@@ -221,6 +233,13 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
 
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {
+                if (_unreachableAuthMetadata)
+                {
+                    // Leave the production configuration in place: the handler
+                    // must attempt the real metadata fetch and fail at transport.
+                    return;
+                }
+
                 options.MetadataAddress = string.Empty;
                 options.ConfigurationManager = null;
                 options.RequireHttpsMetadata = false;
