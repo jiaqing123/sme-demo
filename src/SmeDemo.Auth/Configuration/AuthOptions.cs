@@ -1,9 +1,9 @@
 namespace SmeDemo.Auth.Configuration;
 
 /// <summary>
-/// Environment-driven configuration for the issuer. Everything the service
-/// needs is resolved once at start-up so misconfiguration fails the container
-/// instead of a request.
+/// Configuration-driven options for the issuer. Everything the service needs is
+/// resolved once at start-up so misconfiguration fails the container instead of
+/// a request.
 /// </summary>
 public sealed record AuthOptions(
     string DatabaseUrl,
@@ -26,19 +26,21 @@ public sealed record AuthOptions(
     public const string DefaultDemoPhone = "+61400000000";
     public const string DefaultDemoOtp = "123456";
 
-    public static AuthOptions FromEnvironment()
+    public static AuthOptions FromConfiguration(IConfiguration configuration)
     {
-        var databaseUrl = Required("DATABASE_URL");
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        var databaseUrl = Required(configuration, "DATABASE_URL");
         // Fail closed: demo behaviour (fixed OTP, published password) must be an
         // explicit opt-in, never a default that survives into a shared host.
-        var demoMode = ReadBool("DEMO_MODE", fallback: false);
-        var demoUsername = Read("DEMO_USERNAME", DefaultDemoUsername);
-        var demoPassword = Read("DEMO_PASSWORD", DefaultDemoPassword);
-        var demoPhone = Read("DEMO_PHONE", DefaultDemoPhone);
-        var demoOtp = Read("DEMO_OTP", DefaultDemoOtp);
-        var demoOtpWasConfigured = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DEMO_OTP"));
-        var smsProviderUrl = Optional("SMS_PROVIDER_URL");
-        var jwtIssuer = Read("JWT_ISSUER", "http://auth:8081").TrimEnd('/');
+        var demoMode = ReadBool(configuration, "DEMO_MODE", fallback: false);
+        var demoUsername = Read(configuration, "DEMO_USERNAME", DefaultDemoUsername);
+        var demoPassword = Read(configuration, "DEMO_PASSWORD", DefaultDemoPassword);
+        var demoPhone = Read(configuration, "DEMO_PHONE", DefaultDemoPhone);
+        var demoOtp = Read(configuration, "DEMO_OTP", DefaultDemoOtp);
+        var demoOtpWasConfigured = Optional(configuration, "DEMO_OTP") is not null;
+        var smsProviderUrl = Optional(configuration, "SMS_PROVIDER_URL");
+        var jwtIssuer = Read(configuration, "JWT_ISSUER", "http://auth:8081").TrimEnd('/');
 
         if (!Uri.TryCreate(jwtIssuer, UriKind.Absolute, out var issuerUri) ||
             (issuerUri.Scheme != Uri.UriSchemeHttp && issuerUri.Scheme != Uri.UriSchemeHttps))
@@ -70,7 +72,7 @@ public sealed record AuthOptions(
 
         return new AuthOptions(
             DatabaseUrl: databaseUrl,
-            OrgId: Read("ORG_ID", "sme"),
+            OrgId: Read(configuration, "ORG_ID", "sme"),
             DemoMode: demoMode,
             DemoUsername: demoUsername,
             DemoPassword: demoPassword,
@@ -78,27 +80,28 @@ public sealed record AuthOptions(
             DemoOtp: demoOtp,
             DemoOtpWasConfigured: demoOtpWasConfigured,
             JwtIssuer: jwtIssuer,
-            JwtAudience: Read("JWT_AUDIENCE", "sme-demo-api"),
-            JwtTtl: DurationParser.Parse(Read("JWT_TTL", "30m")),
-            CorsOrigin: Read("CORS_ORIGIN", "http://localhost:8080").TrimEnd('/'),
-            KeysPath: Read("KEYS_PATH", "/keys"),
+            JwtAudience: Read(configuration, "JWT_AUDIENCE", "sme-demo-api"),
+            JwtTtl: DurationParser.Parse(Read(configuration, "JWT_TTL", "30m")),
+            CorsOrigin: Read(configuration, "CORS_ORIGIN", "http://localhost:8080").TrimEnd('/'),
+            KeysPath: Read(configuration, "KEYS_PATH", "/keys"),
             SmsProviderUrl: smsProviderUrl);
     }
 
-    private static string Required(string name) =>
-        Optional(name) ?? throw new InvalidOperationException($"{name} is required.");
+    private static string Required(IConfiguration configuration, string name) =>
+        Optional(configuration, name) ?? throw new InvalidOperationException($"{name} is required.");
 
-    private static string Read(string name, string fallback) => Optional(name) ?? fallback;
+    private static string Read(IConfiguration configuration, string name, string fallback) =>
+        Optional(configuration, name) ?? fallback;
 
-    private static string? Optional(string name)
+    private static string? Optional(IConfiguration configuration, string name)
     {
-        var value = Environment.GetEnvironmentVariable(name);
+        var value = configuration[name];
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     }
 
-    private static bool ReadBool(string name, bool fallback)
+    private static bool ReadBool(IConfiguration configuration, string name, bool fallback)
     {
-        var value = Optional(name);
+        var value = Optional(configuration, name);
         if (value is null)
         {
             return fallback;

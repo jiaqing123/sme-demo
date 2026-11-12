@@ -20,7 +20,7 @@ builder.Host.UseDefaultServiceProvider(provider =>
     provider.ValidateScopes = true;
 });
 
-var options = AuthOptions.FromEnvironment();
+var options = AuthOptions.FromConfiguration(builder.Configuration);
 
 // Build the signing key at start-up so a bad key volume fails the container,
 // not the first login.
