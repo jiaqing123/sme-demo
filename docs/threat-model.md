@@ -1,8 +1,8 @@
 # Threat Model — SME Wallet Reference Architecture
 
-- **Status:** Draft v0.1
+- **Status:** Draft v0.2
 - **Owner:** Architecture
-- **Last updated:** 2026-11-11
+- **Last updated:** 2026-11-13
 - **Scope:** this repository: `web`, `auth`, `api`, `issuer-mock`, `sms-mock`,
   Compose, CI, and the container host.
 - **Normative:** yes. `docs/requirements.md` §11 makes this document a release
@@ -74,20 +74,20 @@ logged; nothing is trusted because it is "internal".
 
 | ID | Threat | Current control in this repo | Required for the reference baseline | Verification |
 |---|---|---|---|---|
-| S1 | Credential stuffing / password brute force | PBKDF2 hashes; per-challenge OTP attempts | Per-IP and per-account rate limiting, lockout/backoff, generic auth errors, MFA/step-up for high-risk actions | Abuse-case tests: 429 + `Retry-After`; no user enumeration |
+| S1 | Credential stuffing / password brute force | PBKDF2 hashes; per-IP fixed-window budgets on login/verify/resend; per-account login budget keyed on the normalized username; per-challenge OTP attempt limit | Per-IP and per-account rate limiting, lockout/backoff, generic auth errors, MFA/step-up for high-risk actions | Abuse-case tests: 429 + numeric `Retry-After`; no user enumeration |
 | S2 | Token forgery | RS256, JWKS, `iss`/`aud`/`exp` validation, `MapInboundClaims=false` | Key rotation and revocation strategy; reject unknown `alg`/`kid` | Tests: bad signature, wrong issuer/audience, expired, `alg=none` |
 | S3 | Token theft / replay | 30-minute TTL; no refresh | Short TTL, rotation, revocation on logout/compromise; consider BFF + httpOnly cookie | Tests: replay after revocation; logout invalidates session |
 | S4 | IDOR / BOLA | Per-user scoping in handlers; org policy | Object-level authorisation tests for every resource; 403/404 must not leak existence | Tests: other user's card, unknown card, wrong org |
 | S5 | Injection (SQL/NoSQL/header) | EF Core/Table SDK parameterisation; FluentValidation | Review every raw query/string interpolation; fuzz malformed payloads | Tests: malformed IDs, oversized input, injection strings |
 | S6 | Repudiation | Structured logs, no stack traces to clients | Immutable/centralised audit trail for auth and authorisation events | Tests: required fields present; log retention/export configured |
-| S7 | Information disclosure (PII/credentials) | Phone/token redaction; no PAN/CVV/PIN | `traceId` in ProblemDetails; scrub logs and telemetry; no secrets in errors | Tests: logs contain no password/OTP/token/phone; response has `traceId` |
+| S7 | Information disclosure (PII/credentials) | Phone/token redaction; no PAN/CVV/PIN; every error uses the `application/problem+json` envelope with `instance` and `traceId` and no exception detail | `traceId` in ProblemDetails; scrub logs and telemetry; no secrets in errors | Tests: logs contain no password/OTP/token/phone; every error response has `traceId` and a stable envelope |
 | S8 | Secret leakage | `.env` git-ignored; `.dockerignore` excludes keys | Secret manager/workload identity in production; CI secret scanning; no secrets in images | Scan repo/image history; test that startup fails without secrets |
-| S9 | Denial of service | None (demo) | Rate limiting, request timeouts, body-size limits, resource limits, queue backpressure | Load/abuse tests; 429/503 with `Retry-After` |
+| S9 | Denial of service | Fixed-window per-IP auth budgets and per-user/per-endpoint `/api/v1` budgets; 429/503 with numeric `Retry-After`; readiness probes have a 5 second deadline. No request timeouts or container resource limits yet. | Rate limiting, request timeouts, body-size limits, resource limits, queue backpressure | Load/abuse tests; 429/503 with `Retry-After` |
 | S10 | Elevation of privilege | Default-deny `FallbackPolicy`; named `ApiUser` policy; org requirement | Policy/authorisation matrix tests; separate ops/admin plane | Tests: anonymous, wrong org, wrong role |
 | S11 | SSRF / unsafe outbound call | Issuer URL comes from configuration, not user input | Egress allowlist, no user-controlled URLs, timeouts/circuit breaker | Review + tests for config-only URLs |
 | S12 | Supply-chain compromise | Central package versions; CI MediatR/AutoMapper guard | Pinned image digests, SBOM, dependency/image scanning, Dependabot, SHA-tagged images | CI fails on vulnerable/unpinned dependency |
 | S13 | Container escape / host compromise | Non-root container user | `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, seccomp, resource limits | Compose/security scan; runtime inspection |
-| S14 | OTP brute force / SMS abuse | 3 wrong OTPs destroys the challenge; 60s resend cooldown | Per-IP/per-account limits, alerting, provider spend caps | Abuse-case tests; alert on spike |
+| S14 | OTP brute force / SMS abuse | 3 wrong OTPs destroys the challenge; 60s resend cooldown; per-IP verify/resend budgets; per-account login budget | Per-IP/per-account limits, alerting, provider spend caps | Abuse-case tests; alert on spike |
 
 ## 5. Abuse cases that must become tests
 
@@ -108,6 +108,9 @@ logged; nothing is trusted because it is "internal".
    CSP/sandbox policy; storage URLs are never exposed to the browser.
 10. A failed `auth` metadata/JWKS fetch degrades to `503`, not a misleading
     `401 INVALID_TOKEN`.
+11. A protected path called with the wrong verb returns `405 METHOD_NOT_ALLOWED`,
+    never `401`, and every error response is `application/problem+json` with
+    `traceId` and `nosniff`.
 
 ## 6. Required controls (reference baseline)
 
@@ -137,7 +140,8 @@ an internet-facing deployment.
 | Token in `sessionStorage` | XSS token theft | BFF + httpOnly/Secure/SameSite cookie, or short-lived tokens with rotation |
 | In-memory challenge store | Restart drops challenges; no horizontal scale | Distributed challenge store with TTL |
 | No revocation / no refresh token | Stolen token valid for 30 minutes | Revocation list/session store, rotation, logout invalidation |
-| Rate limit only per challenge | Credential stuffing / OTP spam | Per-IP + per-account limits, adaptive lockout, alerting |
+| In-memory, per-process rate limiters | Budgets reset on restart and are not shared across replicas, so a restart briefly reopens the windows | Distributed limiter backed by a shared store; central quotas and alerting |
+| Compose trusts one forwarded header hop | The demo publishes `127.0.0.1:8081`, so a local caller can spoof `X-Forwarded-For` and evade the per-IP budgets | Trust only the ingress's exact proxies/networks; never expose `auth` directly |
 | Azurite well-known key | Full storage access if exposed | Managed identity or scoped SAS; no shared key |
 | `sa` for migrations | Excess privilege | Dedicated migrator login scoped to its schema |
 | Fixed demo OTP / public demo password | Anyone can log in | Real IdP, MFA, `DEMO_MODE` hard-off in production |

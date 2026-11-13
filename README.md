@@ -35,11 +35,11 @@ today:
   date-grouped transactions (pending badges, `Load more`, wallet scroll
   restoration), and the profile page are implemented.
 - `SmeDemo.Auth` on port 8081: password login, in-memory OTP challenges, RS256
-  JWT issuance, OIDC discovery, JWKS, `/auth/userinfo`, health check, and a
+  JWT issuance, OIDC discovery, JWKS, `/auth/userinfo`, liveness check, and a
   persisted signing key.
 - `SmeDemo.Api` on port 8082: profile, cards, paginated transactions, card
-  artwork, and demo cards/artwork seeded into SQL Server and Azurite Blob
-  Storage.
+  artwork, dependency readiness at `/readyz`, per-user/per-endpoint rate limits,
+  and demo cards/artwork seeded into SQL Server and Azurite Blob Storage.
 - `SmeDemo.IssuerMock` on port 8084: a deterministic 40-transaction fixture,
   API-key auth, and the issuer health check. `IssuerSyncService` pulls the feed at
   start-up and every `ISSUER_SYNC_INTERVAL`; a failed issuer call is recorded in
@@ -57,7 +57,8 @@ today:
   request it builds and tests .NET (Release) and the web app, checks formatting,
   pending migrations, and generated SQL, regenerates the OpenAPI document, scans
   dependencies and secrets, builds images tagged by commit SHA, and runs a
-  Compose smoke test that logs in through `auth` and calls `GET /api/v1/me`.
+  Compose smoke test that waits for the API's `/readyz`, logs in through `auth`,
+  and calls `GET /api/v1/me`.
 
 Not implemented yet: a real deployment and a real identity provider
 (requirements §3 and §10.6; the demo runs locally from Compose).
@@ -86,10 +87,10 @@ financial services, so the design assumes a motivated attacker: read the
   OTP, and `sms-mock` plaintext logs are public by design.
 - `auth` is a demo issuer and is expected to be replaced; the fixed OTP is
   unreachable unless `DEMO_MODE=true`.
-- Production requires, at minimum: TLS + HSTS, a secret manager, per-IP/account
-  rate limiting, MFA/step-up, token revocation, dependency/image scanning, and a
-  penetration test. The production gap register is in
-  [`docs/threat-model.md`](docs/threat-model.md) §7.
+- Production requires, at minimum: TLS + HSTS, a secret manager, distributed
+  rate limiting across replicas, MFA/step-up, token revocation,
+  dependency/image scanning, and a penetration test. The production gap register
+  is in [`docs/threat-model.md`](docs/threat-model.md) §7.
 
 ## Licensing and distribution
 
@@ -109,8 +110,8 @@ Open `http://localhost:8080`. The demo login is `demo` / `Demo_Passw0rd!` with
 OTP `123456`; the sign-in page also shows these demo hints while `DEMO_MODE` is
 enabled. Port 8080 serves the SPA and proxies `/auth` and `/api`, so that is the
 only URL a browser needs. `auth` is also published on 8081, `api` on 8082
-(`/healthz`, `/api/v1/me`, `/api/v1/me/cards`), `sms-mock` on 8083, and
-`issuer-mock` on 8084 for debugging. Every published port binds to `127.0.0.1`,
+(`/healthz`, `/readyz`, `/api/v1/me`, `/api/v1/me/cards`), `sms-mock` on 8083,
+and `issuer-mock` on 8084 for debugging. Every published port binds to `127.0.0.1`,
 so the stack is reachable from this machine only: the demo password and OTP are
 public by design. Details, the smoke tests, and the schema-change workflow are in
 [`docs/development.md`](docs/development.md).

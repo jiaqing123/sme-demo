@@ -2,7 +2,7 @@
 
 - **Status:** required for every pull request
 - **Owner:** Architecture
-- **Last updated:** 2026-11-11
+- **Last updated:** 2026-11-13
 
 Run this list before opening a pull request and again before merging. A box that
 does not apply is ticked with a one-line reason in the pull request, not silently
@@ -137,12 +137,12 @@ the merge.
 - [ ] The `images` and `compose-smoke` jobs are green. They are CI-only gates:
       the first builds six images (api, auth, web, sms-mock, issuer-mock,
       migrator) tagged with the commit SHA; the second starts the minimal Compose
-      stack and runs `tools/smoke/compose-smoke.sh`, which asserts six checks
-      including the unauthenticated `401 UNAUTHENTICATED` path.
+      stack and runs `tools/smoke/compose-smoke.sh`, which waits for the API's
+      readiness probe and checks the unauthenticated `401 UNAUTHENTICATED` path.
 - [ ] If the change cannot be exercised by the smoke test, say so in the pull
       request and describe the manual check performed.
 
-> **Verification status (2026-11-11):** the full Compose smoke flow passed 6/6
+> **Verification status (2026-11-11):** the full Compose smoke flow passed
 > locally, and two Release builds produced an identical `openapi/v1.json` hash.
 > GitHub Actions has not been executed yet; the Linux `dotnet format` run and the
 > stale-OpenAPI negative path are unverified in CI. Tick the CI boxes only after

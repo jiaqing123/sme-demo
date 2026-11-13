@@ -1,7 +1,7 @@
 # Architecture Decision Record Index
 
 - **Status:** living index of accepted decisions
-- **Last updated:** 2026-11-11
+- **Last updated:** 2026-11-13
 
 This directory records decisions, not designs. Each row is an accepted decision,
 a one-line summary, and the document where the reasoning and the current rule are
@@ -19,7 +19,7 @@ engineer can find them without knowing the section numbers in advance.
 
 | ID | Decision | Status | Recorded in |
 |----|----------|--------|-------------|
-| ADR-001 | Use ASP.NET Core minimal APIs with explicit endpoint contracts; do not move to MVC or a third-party endpoint framework. | Accepted | [`../requirements.md`](../../requirements.md) §5.4, §5.5; [`../../../progress/handoff-reference-baseline.md`](../../../progress/handoff-reference-baseline.md) §3, decision 1 |
+| ADR-001 | Use ASP.NET Core minimal APIs with explicit endpoint contracts; do not move to MVC or a third-party endpoint framework. | Accepted | [`../requirements.md`](../../requirements.md) §5.4, §5.5; [`../../../progress/archive/handoff-reference-baseline.md`](../../../progress/archive/handoff-reference-baseline.md) §3, decision 1 |
 | ADR-002 | Dispatch commands and queries through interfaces owned by `Application`; no MediatR, AutoMapper, generic repository, or unit-of-work package. | Accepted | [`../requirements.md`](../../requirements.md) §13.2; [`../licensing.md`](../../licensing.md) §3; [`../native-di-dispatch.md`](../../native-di-dispatch.md) |
 | ADR-003 | Authentication is default-deny: the API fallback policy requires an authenticated user, and public endpoints are explicitly anonymous. | Accepted | [`../requirements.md`](../../requirements.md) §5.3, §11.1; [`../threat-model.md`](../../threat-model.md) §4 (S10); [`../../../src/SmeDemo.Api/Program.cs`](../../../src/SmeDemo.Api/Program.cs) |
 | ADR-004 | Organisation membership is an authorisation policy requirement, not a path-prefix middleware. | Accepted | [`../requirements.md`](../../requirements.md) §5.3; [`../../../src/SmeDemo.Api/Auth/OrgRequirement.cs`](../../../src/SmeDemo.Api/Auth/OrgRequirement.cs); [`../../../src/SmeDemo.Api/Auth/OrgAuthorizationHandler.cs`](../../../src/SmeDemo.Api/Auth/OrgAuthorizationHandler.cs) |
@@ -35,6 +35,7 @@ engineer can find them without knowing the section numbers in advance.
 | ADR-014 | This is an internal repository and is not distributed outside the company, so no open-source `LICENSE` file is added; external distribution would need a licence decision and `THIRD-PARTY-NOTICES`. | Accepted | [`../licensing.md`](../../licensing.md) §4; [`../../../README.md`](../../../README.md) |
 | ADR-015 | Accept the roughly 3 GB footprint dominated by SQL Server; do not promise the stack runs anywhere without measuring on the actual demo hardware. | Accepted | [`../requirements.md`](../../requirements.md) §5.6, §13.3 |
 | ADR-016 | Delivery is split: GitHub Actions stays the fast pull-request gate, and Azure Pipelines becomes the formal build and Test/UAT/Prod release path. Deployment stages ship as failing placeholders until the hosting model and Azure resources are chosen; images are built once and promoted by tag. | Accepted | [`../../azure-pipelines.md`](../../azure-pipelines.md); [`../../development.md`](../../development.md#continuous-integration); [`../../azure-pipelines.yml`](../../../azure-pipelines.yml) |
+| ADR-017 | Rate limiting and readiness are per-instance runtime controls with in-memory limiters; forwarded-header trust is explicit and Compose-only. A deployment must not assume shared budgets, and production must scope trusted proxies instead of trusting one hop. | Accepted | [`ADR-017`](ADR-017-per-instance-rate-limiting-and-readiness.md); [`../../requirements.md`](../../requirements.md) §11.2–§11.3; [`../../threat-model.md`](../../threat-model.md) §4, §7; [`../../development.md`](../../development.md#auth-rate-limits) ([API rate limits](../../development.md#api-rate-limits), [forwarded headers](../../development.md#forwarded-headers)) |
 
 ## Revisiting a decision
 

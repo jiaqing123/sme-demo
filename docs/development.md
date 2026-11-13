@@ -75,6 +75,28 @@ docker exec sme-demo-mssql-1 /opt/mssql-tools18/bin/sqlcmd `
 
 You should see `users` and `__EFMigrationsHistory`.
 
+## Health and readiness
+
+`auth` is checked with `/healthz` liveness; `api`'s Compose healthcheck calls
+`/readyz`, which proves SQL Server, Blob Storage, and auth metadata are
+reachable. Both endpoints are anonymous:
+
+```powershell
+Invoke-RestMethod http://localhost:8081/healthz   # {"status":"ok"}
+Invoke-RestMethod http://localhost:8082/healthz   # liveness; 200 even when a dependency is down
+Invoke-RestMethod http://localhost:8082/readyz    # {"status":"ready","checks":[...]}
+```
+
+`/readyz` runs its probes in parallel under a 5 second budget. A failed probe
+returns `503` with `Retry-After: 5` and
+`{"status":"degraded","checks":[{"name":"database","status":"degraded"},...]}`.
+`Invoke-RestMethod` throws on a 503, so use
+`Invoke-WebRequest -SkipHttpErrorCheck` (PowerShell 7) when you want to inspect
+the degraded body.
+`/healthz` stays `200`, which is why a dependency outage makes `api` show
+unhealthy in `docker compose ps` without restarting the process. `GET /readyz`
+is also part of the OpenAPI document.
+
 ## Visual Studio and Docker Compose
 
 `SmeDemo.slnx` contains `docker-compose.dcproj`, the Visual Studio orchestration
@@ -237,6 +259,27 @@ volume. With
 `DEMO_MODE=false` the service refuses to start if `DEMO_OTP` is set or if
 `SMS_PROVIDER_URL` is missing.
 
+### Auth rate limits
+
+`auth` applies fixed-window budgets to the abuse-prone endpoints. The per-account
+login budget is checked inside the login flow, after request-shape validation,
+so a malformed body cannot drain another account's budget.
+
+| Budget | Default | Configuration |
+|--------|---------|---------------|
+| Login per IP | 20 per minute | `AUTH_RATE_LIMIT_LOGIN_IP`, `AUTH_RATE_LIMIT_LOGIN_IP_WINDOW` |
+| Login per account | 10 per 5 minutes | `AUTH_RATE_LIMIT_LOGIN_ACCOUNT`, `AUTH_RATE_LIMIT_LOGIN_ACCOUNT_WINDOW` |
+| Verify per IP | 60 per minute | `AUTH_RATE_LIMIT_VERIFY_IP`, `AUTH_RATE_LIMIT_VERIFY_IP_WINDOW` |
+| Resend per IP | 10 per minute | `AUTH_RATE_LIMIT_RESEND_IP`, `AUTH_RATE_LIMIT_RESEND_IP_WINDOW` |
+
+The account key is the trimmed username lower-cased; it is never looked up or
+reflected in the 429, so the response does not reveal whether the account exists.
+Every budget is in-memory and per process: restarting `auth` resets all windows,
+and replicas do not share one. Exhaustion returns `429 RATE_LIMITED` with a
+numeric `Retry-After`; the discovery, JWKS, userinfo, and `/healthz` endpoints
+are not limited. Windows accept the same duration forms as the other settings
+(`1m`, `30s`).
+
 ### Smoke test
 
 ```powershell
@@ -274,8 +317,9 @@ set `DATABASE_URL`, `KEYS_PATH` (for example `./keys`), and
 ## Resource API
 
 `api` runs on port 8082 and verifies the auth service's JWTs through its OIDC
-metadata; it never holds a signing key. Every route except `/healthz` requires
-`Authorization: Bearer <token>`.
+metadata; it never holds a signing key. Every route under `/api/v1` requires
+`Authorization: Bearer <token>`; `/healthz` and `/readyz` are anonymous, and the
+Development-only `/openapi/v1.json` is anonymous too.
 
 Take a token with the auth flow above, then:
 
@@ -307,6 +351,18 @@ Invoke-RestMethod 'http://localhost:8081/auth/userinfo' -Headers $headers
 Expected shapes: `/me` returns `{ id, org, name }`; cards are ordered by
 `display_order`; transactions are newest first and `next_cursor` is `null` on the
 last page. Errors use the ProblemDetails envelope from `requirements.md` §7.2.
+
+### API rate limits
+
+Every `/api/v1` operation has one fixed-window budget per user and endpoint:
+120 requests per minute by default (`API_RATE_LIMIT_PERMIT`,
+`API_RATE_LIMIT_WINDOW`). The partition key is the token's `sub` plus the
+endpoint name, so one hot endpoint does not consume another's budget. The budget
+is checked after authentication, so an anonymous call still gets its normal
+`401`, never a `429`. Exhaustion returns `429 RATE_LIMITED` with a numeric
+`Retry-After`; `/healthz` and `/readyz` are outside the `/api/v1` group and are
+never rate limited. Like the auth budgets, the limiter is in-memory and per
+process.
 
 ### Storage, seeding, and sync
 
@@ -426,8 +482,26 @@ exit code.
 `AUTH_REQUIRE_HTTPS_METADATA` defaults to `true`. Compose sets it to `false` for
 the API only because `auth` is reached over plain HTTP on the internal network;
 this is a development setting, not something to carry into a deployed
-environment. If metadata retrieval fails, the API rejects every token and its
-log shows a metadata/connection error.
+environment. If the metadata/JWKS fetch fails at the transport layer, the API
+returns `503 UPSTREAM_UNAVAILABLE` with `Retry-After: 5` and logs a
+metadata/connection error; it does not mislabel the caller's token as invalid.
+Signature, issuer, audience, expiry, and algorithm failures still return `401`.
+Metadata is cached, so a stale cache can still produce `401 INVALID_TOKEN` for an
+unknown key until it refreshes; restarting `api` discards the cache.
+
+### Forwarded headers
+
+`AUTH_TRUST_FORWARDED_HEADERS` defaults to `false`. Compose sets it to `true`
+because nginx is the only ingress and appends `X-Forwarded-For`, so the per-IP
+budgets key on the browser address instead of the proxy's. When true the code
+trusts a single forwarded hop and clears the default known proxies/networks,
+because the Compose network address is not loopback.
+
+Only enable it when a trusted proxy is the only path to `auth`. A caller that can
+reach `auth` directly can spoof the header and evade the per-IP budgets, and the
+demo still publishes `127.0.0.1:8081` for debugging, so that is true locally. A
+production deployment must instead scope trusted proxies/networks to the exact
+ingress and must not expose `auth` directly.
 
 ## OpenAPI document
 
@@ -446,8 +520,10 @@ the project file.
 
 The document is produced from endpoint metadata. `BearerSecuritySchemeTransformer`
 declares the `Bearer` scheme, and `EndpointSecurityTransformer` adds the
-requirement to every operation that is not explicitly `AllowAnonymous`; `/healthz`
-is therefore documented without a security requirement.
+requirement to every operation that is not explicitly `AllowAnonymous`;
+`/healthz` and `/readyz` are therefore documented without a security requirement.
+Every `/api/v1` operation also declares the `429` response, and `/readyz`
+declares both its `200` and `503` readiness bodies.
 
 Regenerate and check the committed file:
 
@@ -562,7 +638,8 @@ because Vite fingerprints those files; `/index.html` and the SPA fallback are
 `no-cache`. The image also proxies with Docker's embedded DNS
 (`resolver 127.0.0.11`), so recreating `auth` or `api` does not leave nginx
 pointing at a stale container IP. auth's own liveness probe remains `/healthz`
-on 8081; the proxied application routes under `/auth/` are forwarded unchanged.
+on 8081 and api's Compose healthcheck is `/readyz` on 8082; the proxied
+application routes under `/auth/` and `/api/` are forwarded unchanged.
 
 Session behaviour: the token is kept in `sessionStorage` and attached by a
 single fetch wrapper. An authenticated 401 clears the session and redirects to
@@ -603,6 +680,24 @@ on demand. It has five jobs:
 The `dotnet`, `web`, and `compose` jobs need no SQL Server, Azurite, or SMS
 container: the API tests replace the repositories and storage with fakes, the
 auth tests use EF InMemory, and the frontend tests run in jsdom.
+
+### HTTP test hosts
+
+Both service test projects boot the real ASP.NET Core host through
+`WebApplicationFactory`, and both pass configuration with per-factory
+`UseSetting` values instead of mutating process environment variables, so
+factories can run with independent settings in the same test run.
+
+- `tests/SmeDemo.Api.Tests/ApiTestFactory.cs` replaces the card repository,
+  transaction store, blob store, and all readiness probes with fakes, and
+  supplies a local RSA key instead of fetching auth metadata. Its constructor
+  can lower `API_RATE_LIMIT_PERMIT`/`API_RATE_LIMIT_WINDOW` for a test.
+- `tests/SmeDemo.Auth.Tests/AuthTestFactory.cs` replaces the SQL Server
+  DbContext with EF InMemory but keeps the real seeder, swaps the SMS provider
+  for a recording fake, and installs a manual clock for challenge TTL and resend
+  cooldown. It accepts `AUTH_RATE_LIMIT_*` and other host settings per factory.
+  Auth reads its options through `IConfiguration`, so the same values work from
+  environment variables or another provider outside tests.
 
 The Azure Pipelines equivalent — the same Build gates plus the Test, UAT, and
 Production deployment stages — is described in
@@ -672,11 +767,12 @@ docker compose up -d --build \
 
 It waits for `auth` and `api` to be healthy and for `db-migrator`,
 `db-migrator-auth`, and `db-grants` to exit 0, then runs
-`bash tools/smoke/compose-smoke.sh`. The script asserts six things and prints
-`PASS`/`FAIL` for each:
+`bash tools/smoke/compose-smoke.sh`. The script prints `PASS`/`FAIL` for each
+check:
 
 1. `auth` returns 200 from `/healthz`.
-2. `api` returns 200 from `/healthz`.
+2. `api` returns 200 from `/readyz`, proving SQL Server, Blob Storage, and auth
+   metadata are reachable.
 3. `POST /auth/login` returns 200 with a `challenge_id`.
 4. `POST /auth/challenges/<id>/verify` returns 200 with an `access_token`.
 5. `GET /api/v1/me` with the token returns 200 with the expected `org` and a
@@ -752,17 +848,17 @@ your operating system locally.
   `docker compose build` locally proves the Dockerfiles on your machine, but it is
   not the same gate: the CI job builds every image, on Linux, from a clean
   checkout, with the repository root as the build context.
-- **`compose-smoke`** starts the minimal real stack, performs the auth login and
-  OTP flow, and calls the API through the token. A full local run on 2026-11-11
-  passed all six checks (6/6). Reproduce it with the minimal `docker compose up
-  -d --build` command above, `bash tools/smoke/compose-smoke.sh`, and
+- **`compose-smoke`** starts the minimal real stack, waits for the API's
+  readiness check, performs the auth login and OTP flow, and calls the API
+  through the token. Reproduce it with the minimal `docker compose up -d
+  --build` command above, `bash tools/smoke/compose-smoke.sh`, and
   `docker compose down -v --remove-orphans`; the CI job remains the required
   Linux proof.
 
 ### Verification status (2026-11-11)
 
 - The full Compose smoke flow was run locally against the real stack on
-  2026-11-11 and passed 6/6.
+  2026-11-11 and passed.
 - A second Release build produced an identical `openapi/v1.json` SHA-256, so the
   build-time generation is deterministic.
 - GitHub Actions itself has not been executed. The Linux `dotnet format` run and
@@ -869,7 +965,11 @@ reset. Do not use it on a database you care about.
 | Login or resend returns `503` `UPSTREAM_UNAVAILABLE` | `sms-mock` is stopped or `SMS_PROVIDER_URL` is wrong | `docker compose ps sms-mock`, check `docker compose logs auth` and the URL, then `docker compose start sms-mock` |
 | Auth cannot write `/keys` | key volume not writable by the app user | `docker compose down -v` to recreate the volume |
 | `api` unhealthy or restarts | Azurite/Table/Blob not ready, or SQL login lacks rights | check `docker compose logs api`: the seeder retries 20 times, then stops the host; check `docker compose ps azurite` and `db-grants` |
-| Every API call returns 401 | metadata fetch from `auth` failed, or `AUTH_METADATA_URL`/issuer/audience mismatched | check `docker compose logs api`; confirm `AUTH_REQUIRE_HTTPS_METADATA=false` in Compose and that auth is healthy |
+| `api` unhealthy but `/healthz` returns 200 | `/readyz` cannot reach SQL Server, Blob Storage, or auth metadata | `Invoke-WebRequest -SkipHttpErrorCheck http://localhost:8082/readyz`; the `checks` array names the failed dependency; check `docker compose logs api` |
+| Every authenticated `/api/v1` call returns `503` `UPSTREAM_UNAVAILABLE` | auth metadata/JWKS fetch failed at the transport layer | check `docker compose ps auth`, `AUTH_METADATA_URL`, and `AUTH_REQUIRE_HTTPS_METADATA=false` in Compose; the response carries `Retry-After: 5` |
+| Valid token returns `401` `INVALID_TOKEN` after auth recovered | `api` still has a stale cached metadata document | restart `api` to discard the cache, or wait for the refresh; signature, issuer, and audience failures are real 401s |
+| Login, verify, or resend returns `429` `RATE_LIMITED` | an auth budget is exhausted (defaults: login 20/IP/min and 10/account/5m, verify 60/IP/min, resend 10/IP/min) | wait for `Retry-After`; raise the matching `AUTH_RATE_LIMIT_*` values; restarting `auth` resets the in-memory windows |
+| `/api/v1` returns `429` `RATE_LIMITED` | the per-user, per-endpoint API budget is exhausted (default 120/min) | wait for `Retry-After`; raise `API_RATE_LIMIT_PERMIT`/`API_RATE_LIMIT_WINDOW`; restarting `api` resets the in-memory windows |
 | `issuer_sync` rows are `failed` | issuer-mock stopped, wrong `ISSUER_API_KEY`, or issuer returned an invalid payload | check `docker compose ps issuer-mock` and `docker compose logs api`; curl the issuer endpoint with the configured key; the API keeps serving the local feed meanwhile |
 | Wallet has cards but no transactions after a fresh start | the first sync has not run yet, or it failed | wait for `ISSUER_SYNC_INTERVAL`, check `app.issuer_sync`, and re-run with a short `ISSUER_SYNC_INTERVAL=10s` if needed |
 | Issuer returns 401 | `ISSUER_API_KEY` differs between `api` and `issuer-mock` | set one value for both in `.env` and recreate both containers |

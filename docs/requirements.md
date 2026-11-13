@@ -1,8 +1,11 @@
 # SME Demo — System Requirements & Architecture
 
-- **Status:** Draft v0.5
+- **Status:** Draft v0.6
 - **Owner:** Architecture
-- **Last updated:** 2026-11-11
+- **Last updated:** 2026-11-13
+- **Changes in v0.6:** the problem envelope, fixed-window rate limiting,
+  dependency readiness (`/readyz`), security headers, and explicit
+  forwarded-header trust are implemented and documented.
 - **Changes in v0.5:** security is now a release gate. The financial-sector
   threat model, abuse cases, and production gap register live in
   [`threat-model.md`](threat-model.md) and are normative for production
@@ -119,6 +122,7 @@ Compose network and never holds a signing key.
 | Concern | Choice |
 |---------|--------|
 | Runtime | .NET 10 (LTS), C# 14 |
+| Hosting | ASP.NET Core minimal host with `ValidateOnBuild` and `ValidateScopes` enabled in every environment |
 | API host | ASP.NET Core minimal APIs |
 | Endpoint orchestration | Native DI: `IQueryHandler<,>` / `ICommandHandler<,>` contracts declared in `Application` (§13.2) |
 | Object mapping | Hand-written projections at the call site (no mapping library) |
@@ -130,9 +134,10 @@ Compose network and never holds a signing key.
 | Authentication | `Microsoft.AspNetCore.Authentication.JwtBearer` |
 | Token creation | `Microsoft.IdentityModel.JsonWebTokens` |
 | Password hashing | `Microsoft.AspNetCore.Identity.PasswordHasher<T>` (PBKDF2) |
-| OpenAPI | built-in `Microsoft.AspNetCore.OpenApi`; the document is a committed build artefact (`openapi/v1.json`) |
-| Errors | built-in `ProblemDetails` + `IExceptionHandler` |
-| Health checks | plain `GET /healthz` liveness endpoint; no `Microsoft.Extensions.Diagnostics.HealthChecks` middleware and no `/readyz` readiness probe yet |
+| OpenAPI | built-in `Microsoft.AspNetCore.OpenApi`; documents `/readyz` and the `429` response on every `/api/v1` operation; the document is a committed build artefact (`openapi/v1.json`) |
+| Errors | `ProblemDetails` written as `application/problem+json` by a single response writer, plus `IExceptionHandler`; `error.code` and `error.message`, with `error.errors` on validation failures (§7.2) |
+| Health checks | `GET /healthz` liveness and `GET /readyz` readiness endpoints built on minimal APIs; no `Microsoft.Extensions.Diagnostics.HealthChecks` middleware |
+| Rate limiting | Built-in `Microsoft.AspNetCore.RateLimiting` fixed-window limiters: per-IP auth budgets, one per-account login budget, and a per-user/per-endpoint `/api/v1` budget; in-memory and per process (§10.3, §11.3) |
 | Logging | built-in `Microsoft.Extensions.Logging`, console output (no JSON console configured) |
 
 **Preference rule.** Microsoft packages come first for runtime, hosting,
@@ -240,13 +245,19 @@ sequenceDiagram
 The discovery document exists so the API can use the stock `JwtBearer` handler
 with `MetadataAddress`, instead of hand-rolled validation code.
 
+`POST /auth/login`, `/auth/challenges/{id}/verify`, and
+`/auth/challenges/{id}/resend` each have a per-IP fixed-window budget; login also
+has a per-account budget keyed on the normalized username (§10.3). Exceeding a
+budget returns `429 RATE_LIMITED` with a numeric `Retry-After`. The discovery,
+JWKS, userinfo, and liveness endpoints are not rate limited.
+
 ### 6.3 Challenge rules
 
 | Rule | Value |
 |------|-------|
 | Challenge TTL | 5 minutes |
-| Max verification attempts | 3, then the challenge is destroyed |
-| Resend cooldown | 60 seconds |
+| Max verification attempts | 3, then the challenge is destroyed and the response is `429 RATE_LIMITED` with `Retry-After` |
+| Resend cooldown | 60 seconds; a request inside the cooldown is `429 RATE_LIMITED` with `Retry-After` |
 | Challenge reuse | Single use; a successful verify invalidates it |
 | Challenge storage | In-memory in `auth` (single instance, demo only) |
 
@@ -298,11 +309,11 @@ does deliberately record the recipient phone number and message text, including
 the OTP; it has no other delivery mechanism. The request body is capped at 64 KB.
 
 When the gateway is unreachable, times out, or returns a non-2xx status, login
-and resend return `503` with code `UPSTREAM_UNAVAILABLE` and the message
-"The SMS provider is unavailable. Try again shortly." A login that fails this way
-does not leave a challenge behind; a failed resend keeps the already-updated
-challenge, so the user waits out the 60 second cooldown. Caller cancellation is
-never translated into a 503.
+and resend return `503` with code `UPSTREAM_UNAVAILABLE`, the message
+"The SMS provider is unavailable. Try again shortly.", and `Retry-After: 5`. A
+login that fails this way does not leave a challenge behind; a failed resend
+keeps the already-updated challenge, so the user waits out the 60 second
+cooldown. Caller cancellation is never translated into a 503.
 
 ### 6.6 Token specification
 
@@ -346,7 +357,7 @@ Accepted limitations: no refresh token, no revocation.
 ## 7. Resource API
 
 Base path `/api/v1`. JSON only. `Authorization: Bearer <jwt>` on every request
-except `/healthz`.
+except `/healthz`, `/readyz`, and the Development-only `/openapi/v1.json`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -354,7 +365,8 @@ except `/healthz`.
 | GET | `/api/v1/me/cards` | All cards for the caller, in display order. |
 | GET | `/api/v1/me/cards/{card_id}/transactions` | Transactions for one card, newest first. |
 | GET | `/api/v1/cards/{card_id}/art` | Card artwork, streamed from blob storage. |
-| GET | `/healthz` | Liveness for Compose. |
+| GET | `/healthz` | Liveness only; stays `200` when dependencies are down. |
+| GET | `/readyz` | Readiness: SQL Server, Blob Storage, and the auth metadata document, checked in parallel under a 5 second budget. Anonymous. |
 | GET | `/openapi/v1.json` | Runtime OpenAPI document (Development only); the committed build-time copy is [`openapi/v1.json`](../openapi/v1.json). |
 
 ### 7.1 Responses
@@ -372,14 +384,30 @@ so blob credentials never reach the browser.
 
 ### 7.2 Errors
 
+Both services use the same `application/problem+json` envelope for every error:
+
 ```json
-{ "error": { "code": "TOKEN_EXPIRED", "message": "Access token has expired." } }
+{ "type": "https://httpstatuses.io/401",
+  "title": "TOKEN_EXPIRED",
+  "status": 401,
+  "detail": "Access token has expired.",
+  "instance": "/api/v1/me",
+  "traceId": "0HN7...:00000001",
+  "error": { "code": "TOKEN_EXPIRED", "message": "Access token has expired." } }
 ```
 
-Validation failures additionally carry a per-field dictionary:
+`title` equals the error code, `instance` is the request path, and `traceId` is
+the request correlation identifier. Validation failures additionally carry a
+per-field dictionary:
 
 ```json
-{ "error": { "code": "VALIDATION_ERROR",
+{ "type": "https://httpstatuses.io/400",
+  "title": "VALIDATION_ERROR",
+  "status": 400,
+  "detail": "One or more validation errors occurred.",
+  "instance": "/auth/login",
+  "traceId": "0HN7...:00000002",
+  "error": { "code": "VALIDATION_ERROR",
              "message": "One or more validation errors occurred.",
              "errors": { "code": ["The code must be 6 digits."] } } }
 ```
@@ -389,12 +417,22 @@ Validation failures additionally carry a per-field dictionary:
 | `VALIDATION_ERROR` | 400 | Malformed body or query, or a validator rejected the request; details in `error.errors`. |
 | `UNAUTHENTICATED` | 401 | Missing or unparseable bearer token. |
 | `TOKEN_EXPIRED` | 401 | `exp` in the past. |
-| `INVALID_TOKEN` | 401 | Signature, `iss`, or `aud` mismatch. |
-| `FORBIDDEN` | 403 | Token valid but org mismatch or resource not owned. |
-| `NOT_FOUND` | 404 | Unknown card ID. |
-| `UPSTREAM_UNAVAILABLE` | 503 | A required store is unavailable after retries. |
-| `RATE_LIMITED` | 429 | Too many OTP attempts or sends. |
-| `INTERNAL` | 500 | Unhandled failure. |
+| `INVALID_TOKEN` | 401 | Signature, `iss`, `aud`, or algorithm mismatch, or a key set cached from an older metadata document. |
+| `FORBIDDEN` | 403 | Token valid but org mismatch or resource not owned. The auth service has no authorisation layer and does not return this code. |
+| `NOT_FOUND` | 404 | Unknown route or unknown resource ID. |
+| `METHOD_NOT_ALLOWED` | 405 | A matched path called with an unsupported verb. Routing rejects it before authentication, so even a protected route returns `405`, never `401`. |
+| `RATE_LIMITED` | 429 | An auth or API fixed-window budget is exhausted, or a challenge is locked after too many attempts. Always carries a numeric `Retry-After`. |
+| `INTERNAL` | 500 | Unhandled failure; the client sees no implementation detail. |
+| `UPSTREAM_UNAVAILABLE` | 503 | A required store, the SMS provider, or the auth metadata/JWKS endpoint is unavailable. Carries `Retry-After: 5`. |
+
+A failed auth metadata/JWKS fetch at the transport layer is
+`503 UPSTREAM_UNAVAILABLE`, not `401 INVALID_TOKEN`; signature, issuer,
+audience, expiry, and algorithm failures remain `401`. Metadata is cached, so a
+stale cache can still reject an unknown key with `401` until it refreshes.
+
+`/readyz` is the one error response that is not a ProblemDetails document: its
+`503` is the readiness body (`{"status":"degraded","checks":[...]}`) with
+`Retry-After: 5`, because an orchestrator consumes it rather than an API client.
 
 ### 7.3 Pagination
 
@@ -814,7 +852,7 @@ Card expiry is the industry `MM/YY` form (`09/28`), not a full date.
 |---------|-------|-----------|-------------|
 | `web` | multi-stage Node build → nginx | 8080 | `GET /` |
 | `auth` | built from `src/SmeDemo.Auth` | 8081 | `GET /healthz` |
-| `api` | built from `src/SmeDemo.Api` | 8082 | `GET /healthz` |
+| `api` | built from `src/SmeDemo.Api` | 8082 | `GET /readyz` |
 | `sms-mock` | built from `tools/SmsMock` | 8083 | `GET /healthz` |
 | `issuer-mock` | built from `tools/IssuerMock` | 8084 | `GET /healthz` |
 | `mssql` | `mcr.microsoft.com/mssql/server:2022-latest` | none | `sqlcmd SELECT 1` |
@@ -839,11 +877,16 @@ exists for debugging and the documented curl examples. Every published port
 binds to `127.0.0.1`: the demo credential and OTP are part of the documentation,
 so the stack must not be reachable from another machine.
 
-All application healthchecks above are **liveness only**: `/healthz` reports that
-the process is running. They do not check SQL Server, Table/Blob Storage, or the
-auth metadata endpoint, so Compose can report `auth` and `api` healthy while a
-dependency is unavailable; there is no `/readyz` endpoint yet. Readiness probes,
-and switching the Compose healthchecks to them, are a PR 2 gap.
+`auth`, `sms-mock`, `issuer-mock`, and `web` healthchecks are **liveness only**:
+`/healthz` reports that the process is running. `api`'s Compose healthcheck calls
+`GET /readyz`, which checks SQL Server, Blob Storage, and the auth metadata
+document in parallel under a 5 second budget. It returns `200` with
+`{"status":"ready","checks":[...]}` when all three pass, and `503` with
+`{"status":"degraded","checks":[...]}` plus `Retry-After: 5` otherwise. `api`'s
+`/healthz` remains liveness only and stays `200` when a dependency is down, so a
+dependency outage marks the container unhealthy without restarting the process.
+The Compose smoke script waits for auth's `/healthz` and the API's `/readyz`
+before running the functional checks.
 
 ### 10.2 Compose profiles
 
@@ -876,6 +919,18 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 | `DATABASE_URL` (auth/api) | auth, api | Compose-internal DSNs using the app logins |
 | `SME_API_DB_PASSWORD` / `SME_AUTH_DB_PASSWORD` | db-grants, api, auth | `.env` only; grants add `db_datareader` + `db_datawriter` |
 | `CORS_ORIGIN` | auth, api | `http://localhost:8080` |
+| `AUTH_TRUST_FORWARDED_HEADERS` | auth | `false`; Compose sets `true` because nginx is the only ingress and appends `X-Forwarded-For` (§11.3) |
+| `AUTH_RATE_LIMIT_LOGIN_IP` / `AUTH_RATE_LIMIT_LOGIN_IP_WINDOW` | auth | `20` per `1m` |
+| `AUTH_RATE_LIMIT_LOGIN_ACCOUNT` / `AUTH_RATE_LIMIT_LOGIN_ACCOUNT_WINDOW` | auth | `10` per `5m`, keyed on the normalized username after request validation |
+| `AUTH_RATE_LIMIT_VERIFY_IP` / `AUTH_RATE_LIMIT_VERIFY_IP_WINDOW` | auth | `60` per `1m` |
+| `AUTH_RATE_LIMIT_RESEND_IP` / `AUTH_RATE_LIMIT_RESEND_IP_WINDOW` | auth | `10` per `1m` |
+| `API_RATE_LIMIT_PERMIT` / `API_RATE_LIMIT_WINDOW` | api | `120` per `1m`, per user and endpoint under `/api/v1` |
+
+Rate limits are fixed-window, in-memory, and per process: a restart resets every
+budget and replicas do not share one. Windows accept the same duration forms as
+the other intervals (`1m`, `30s`). `/healthz` and `/readyz` are never rate
+limited. A configured value that is not a positive integer or duration fails the
+container at start-up.
 
 Secrets live in `.env` (git-ignored, with `.env.example` committed). No secret
 is baked into an image.
@@ -956,7 +1011,8 @@ Rules:
 - Authentication and authorisation are default-deny. Public endpoints are
   explicitly anonymous; object-level authorisation is tested, not assumed.
 - Rate limiting, request timeouts, and resource limits are required on every
-  externally reachable service; `429` and `503` responses carry `Retry-After`.
+  externally reachable service; `429` and `503` responses carry a numeric
+  `Retry-After`.
 - TLS terminates at the edge in production; HSTS, secure headers, and
   `X-Content-Type-Options: nosniff` are part of the baseline.
 - Security events (login success/failure, OTP failure, authorisation denial,
@@ -974,6 +1030,25 @@ Rules:
 - RS256 tokens, 30-minute TTL, signature and `iss`/`aud`/`exp` all validated.
 - The fixed OTP is unreachable unless `DEMO_MODE=true`.
 - CORS allowlist limited to the web origin.
+- Every API/auth error response is `application/problem+json` with `status`,
+  `title` (= error code), `type`, `detail`, `instance`, `traceId`, and
+  `error.code`/`error.message`; validation adds `error.errors`. The readiness
+  body is the documented exception (§7.2).
+- A wrong verb on a matched path is `405 METHOD_NOT_ALLOWED`, never `401`, and
+  every error response carries `X-Content-Type-Options: nosniff`.
+- Fixed-window rate limits: per-IP login/verify/resend budgets, a per-account
+  login budget, and a per-user/per-endpoint `/api/v1` budget. `429` and `503`
+  carry a numeric `Retry-After`, including the challenge attempt lockout.
+- `GET /readyz` probes SQL Server, Blob Storage, and auth metadata in parallel
+  under a 5 second budget; `/healthz` stays liveness only.
+- A failed auth metadata/JWKS fetch is `503 UPSTREAM_UNAVAILABLE`, not
+  `401 INVALID_TOKEN`.
+- Card artwork carries `Content-Security-Policy: default-src 'none'; sandbox`
+  while keeping `image/svg+xml` and the private cache policy.
+- Forwarded-header trust is explicit configuration and off by default;
+  Compose turns it on only because nginx is the sole ingress (§11.3).
+- The DI container is validated at start-up in every environment
+  (`ValidateOnBuild`, `ValidateScopes`).
 - No PAN, CVV, or PIN anywhere in code, seed data, or logs.
 - Card art served only through the API; storage credentials stay server-side.
 - Application logs do not contain phone numbers, tokens, passwords, or OTP codes.
@@ -982,15 +1057,22 @@ Rules:
 
 ### 11.3 Accepted for the demo only (must not ship)
 
-The following are localhost-only shortcuts. `docs/threat-model.md` §7 maps each
-one to its production replacement; none of them is acceptable in an
-internet-facing deployment.
+The following are demo shortcuts, acceptable only in localhost Compose.
+`docs/threat-model.md` §7 maps each one to its production replacement; none of
+them is acceptable in an internet-facing deployment.
 
 - Plain HTTP on localhost, no TLS.
 - Token in `sessionStorage` rather than an httpOnly cookie.
 - In-memory challenge store; an `auth` restart drops pending challenges.
 - No revocation, no refresh token.
-- Rate limiting is per-challenge, not per-IP.
+- Rate limiters are in-memory and per process: budgets reset on restart and are
+  not shared across replicas. Production needs a distributed limiter, or
+  per-instance limits sized for the replica count.
+- Compose sets `AUTH_TRUST_FORWARDED_HEADERS=true` and trusts a single forwarded
+  hop because nginx is the only ingress. The demo still publishes
+  `127.0.0.1:8081`, so a local caller can spoof `X-Forwarded-For` and evade the
+  per-IP budgets. Production must scope trusted proxies/networks to the exact
+  ingress and must not expose `auth` directly.
 - Storage uses the Azurite development account with its well-known key.
   Production would use managed identity or a scoped SAS instead of a connection
   string.

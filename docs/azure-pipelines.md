@@ -128,15 +128,17 @@ The `ComposeSmoke` job:
    `db-migrator`, `db-migrator-auth`, `db-grants`, `auth`, and `api`
    (Compose also starts their dependencies, including `sms-mock` and
    `issuer-mock`)
-3. waits up to 180 seconds for `auth` and `api` to be healthy and for the three
-   one-shot containers to exit 0
+3. waits up to 180 seconds for `auth` and `api` to be healthy (the API
+   healthcheck is `GET /readyz`) and for the three one-shot containers to exit 0
 4. runs [`tools/smoke/compose-smoke.sh`](../tools/smoke/compose-smoke.sh)
 5. dumps `docker compose ps -a` and `docker compose logs --no-color` on failure
 6. always runs `docker compose down -v --remove-orphans`
 
 The smoke script checks:
 
-- `GET /healthz` on auth (`:8081`) and api (`:8082`)
+- `GET /healthz` on auth (`:8081`)
+- `GET /readyz` on api (`:8082`), which must report 200 after checking SQL
+  Server, Blob Storage, and auth metadata
 - `POST /auth/login` with the demo credentials
 - `POST /auth/challenges/<id>/verify` with the fixed demo OTP
 - `GET /api/v1/me` with the access token: HTTP 200, `org` equal to the expected
@@ -189,8 +191,9 @@ order:
    idempotent scripts before rolling out the application.
 2. **Roll out** — deploy the image tag produced by the Build stage. Use the
    same digest/tag for every environment; do not rebuild during deployment.
-3. **Smoke** — call the environment's auth and API URLs with the same contract
-   as `compose-smoke.sh`, then run any environment-specific checks.
+3. **Smoke** — check auth's `/healthz` and the API's `/readyz`, then call the
+   environment's auth and API URLs with the same contract as
+   `compose-smoke.sh` and any environment-specific checks.
 
 The rollout task depends on the hosting model:
 

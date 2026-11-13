@@ -2,7 +2,7 @@
 
 - **Status:** reference baseline for this repository
 - **Owner:** Architecture
-- **Last updated:** 2026-11-11
+- **Last updated:** 2026-11-13
 - **Applies to:** `SmeDemo.Api`, `SmeDemo.Application`, `SmeDemo.Domain`,
   `SmeDemo.Infrastructure`, `SmeDemo.Auth`, and the delivery configuration in
   this repository.
@@ -101,6 +101,6 @@ The baseline changes with the code. When a document here and the code disagree,
 the code and the normative documents above win; fix the reference document in the
 same pull request. The CI pipeline that proves the baseline is described in
 [`../development.md`](../development.md); the image-build and Compose smoke-test
-jobs run only in CI today. The Compose smoke has been exercised locally (6/6 on
-2026-11-11), but the image job's clean-checkout proof and GitHub Actions itself
-have not run yet; that caveat is recorded in the development guide.
+jobs run only in CI today. The Compose smoke has been exercised locally, but the
+image job's clean-checkout proof and GitHub Actions itself have not run yet; that
+caveat is recorded in the development guide.
