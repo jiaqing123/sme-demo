@@ -191,6 +191,8 @@ app.UseStatusCodePages(async statusCodeContext =>
         }),
         StatusCodes.Status404NotFound => ApiProblem.NotFound("The requested resource was not found."),
         StatusCodes.Status405MethodNotAllowed => ApiProblem.MethodNotAllowed(),
+        StatusCodes.Status413PayloadTooLarge => ApiProblem.PayloadTooLarge(),
+        StatusCodes.Status415UnsupportedMediaType => ApiProblem.UnsupportedMediaType(),
         _ => null,
     };
 

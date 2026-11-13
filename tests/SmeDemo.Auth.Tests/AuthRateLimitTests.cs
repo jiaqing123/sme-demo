@@ -121,10 +121,128 @@ public sealed class AuthRateLimitTests
         Assert.AreEqual(1, ChallengeCount());
     }
 
+    [TestMethod]
+    public async Task VerifyBurstFromOneIp_RejectsTheCorrectCodeAfterTheBudgetIsGone()
+    {
+        CreateHost(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AUTH_RATE_LIMIT_VERIFY_IP"] = "2",
+            ["AUTH_RATE_LIMIT_VERIFY_IP_WINDOW"] = "1m",
+        });
+
+        var challengeId = await LoginAndGetChallengeIdAsync();
+
+        using var first = await VerifyAsync(challengeId, "000000");
+        Assert.AreEqual(HttpStatusCode.Unauthorized, first.StatusCode);
+
+        using var second = await VerifyAsync(challengeId, "000000");
+        Assert.AreEqual(HttpStatusCode.Unauthorized, second.StatusCode);
+
+        // The challenge still has one attempt left, but the IP budget is gone;
+        // a rejected request must be the limiter, not the challenge store.
+        using var third = await VerifyAsync(challengeId, AuthTestFactory.DemoOtp);
+        Assert.AreEqual(
+            HttpStatusCode.TooManyRequests,
+            third.StatusCode,
+            await third.Content.ReadAsStringAsync());
+
+        var problem = await ReadProblemAsync(third);
+        Assert.AreEqual("RATE_LIMITED", problem.Code);
+        AssertNumericRetryAfter(third);
+    }
+
+    [TestMethod]
+    public async Task ResendBurstFromOneIp_IsRejectedEvenAfterTheChallengeCooldown()
+    {
+        CreateHost(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AUTH_RATE_LIMIT_RESEND_IP"] = "1",
+            // Longer than the challenge cooldown so advancing 60s cannot reset
+            // the limiter window and make this test time-dependent.
+            ["AUTH_RATE_LIMIT_RESEND_IP_WINDOW"] = "5m",
+        });
+
+        var challengeId = await LoginAndGetChallengeIdAsync();
+
+        // The first resend is rejected by the challenge cooldown but still
+        // consumes the single IP permit.
+        using var duringCooldown = await _client.PostAsync(
+            $"/auth/challenges/{challengeId}/resend",
+            content: null);
+        Assert.AreEqual(HttpStatusCode.TooManyRequests, duringCooldown.StatusCode);
+
+        _factory.Advance(TimeSpan.FromSeconds(60));
+
+        // Without the IP limiter this would now succeed and send an OTP.
+        using var afterCooldown = await _client.PostAsync(
+            $"/auth/challenges/{challengeId}/resend",
+            content: null);
+        Assert.AreEqual(
+            HttpStatusCode.TooManyRequests,
+            afterCooldown.StatusCode,
+            await afterCooldown.Content.ReadAsStringAsync());
+
+        var problem = await ReadProblemAsync(afterCooldown);
+        Assert.AreEqual("RATE_LIMITED", problem.Code);
+        Assert.AreEqual(1, _factory.FakeSms.SendCount, "A rate-limited resend must not send an OTP.");
+    }
+
+    [TestMethod]
+    public async Task ForwardedFor_PartitionsPerClient_WhenTrustIsEnabled()
+    {
+        CreateHost(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["AUTH_TRUST_FORWARDED_HEADERS"] = "true",
+            ["AUTH_RATE_LIMIT_LOGIN_IP"] = "1",
+            ["AUTH_RATE_LIMIT_LOGIN_IP_WINDOW"] = "1m",
+        });
+
+        using var first = await LoginWithForwardedForAsync("203.0.113.10");
+        Assert.AreEqual(HttpStatusCode.OK, first.StatusCode, await first.Content.ReadAsStringAsync());
+
+        using var second = await LoginWithForwardedForAsync("203.0.113.11");
+        Assert.AreEqual(
+            HttpStatusCode.OK,
+            second.StatusCode,
+            "A different forwarded client address must get its own budget.");
+
+        using var repeated = await LoginWithForwardedForAsync("203.0.113.10");
+        Assert.AreEqual(
+            HttpStatusCode.TooManyRequests,
+            repeated.StatusCode,
+            await repeated.Content.ReadAsStringAsync());
+    }
+
     private void CreateHost(IReadOnlyDictionary<string, string> settings)
     {
         _factory = new AuthTestFactory(settings);
         _client = _factory.CreateClient();
+    }
+
+    private async Task<string> LoginAndGetChallengeIdAsync()
+    {
+        using var login = await LoginAsync(AuthTestFactory.DemoUsername, AuthTestFactory.DemoPassword);
+        Assert.AreEqual(HttpStatusCode.OK, login.StatusCode, await login.Content.ReadAsStringAsync());
+
+        using var document = JsonDocument.Parse(await login.Content.ReadAsStringAsync());
+        return document.RootElement.GetProperty("challenge_id").GetString()!;
+    }
+
+    private async Task<HttpResponseMessage> VerifyAsync(string challengeId, string code) =>
+        await _client.PostAsJsonAsync($"/auth/challenges/{challengeId}/verify", new { code });
+
+    private async Task<HttpResponseMessage> LoginWithForwardedForAsync(string forwardedFor)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/auth/login")
+        {
+            Content = JsonContent.Create(new
+            {
+                username = AuthTestFactory.DemoUsername,
+                password = AuthTestFactory.DemoPassword,
+            }),
+        };
+        request.Headers.Add("X-Forwarded-For", forwardedFor);
+        return await _client.SendAsync(request);
     }
 
     private async Task<HttpResponseMessage> LoginAsync(string username, string password) =>

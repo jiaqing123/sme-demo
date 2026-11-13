@@ -25,10 +25,7 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
             ResourceNotFoundException notFound => ApiProblem.NotFound(notFound.Message),
             UnauthenticatedException unauthenticated => ApiProblem.Unauthenticated(unauthenticated.Message),
             StoreUnavailableException => ApiProblem.UpstreamUnavailable(),
-            BadHttpRequestException => ApiProblem.Validation(new Dictionary<string, string[]>
-            {
-                ["body"] = ["The request body could not be read."],
-            }),
+            BadHttpRequestException badRequest => FromBadRequest(badRequest),
             _ => ApiProblem.Internal(),
         };
 
@@ -45,4 +42,20 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         return true;
     }
+
+    /// <summary>
+    /// The framework reports several request-shape failures as
+    /// <see cref="BadHttpRequestException"/> and records the intended status on
+    /// the exception. Preserve 413/415 instead of flattening every one to 400.
+    /// </summary>
+    private static ApiProblem FromBadRequest(BadHttpRequestException exception) =>
+        exception.StatusCode switch
+        {
+            StatusCodes.Status413PayloadTooLarge => ApiProblem.PayloadTooLarge(),
+            StatusCodes.Status415UnsupportedMediaType => ApiProblem.UnsupportedMediaType(),
+            _ => ApiProblem.Validation(new Dictionary<string, string[]>
+            {
+                ["body"] = ["The request body could not be read."],
+            }),
+        };
 }

@@ -57,7 +57,7 @@ builder.Services.AddCors(cors => cors.AddDefaultPolicy(policy => policy
 
 if (options.TrustForwardedHeaders)
 {
-    // Compose nginx is the only ingress in front of auth and appends the real
+    // Compose nginx is the only intended browser ingress in front of auth and appends the real
     // remote address to X-Forwarded-For, so trusting the right-most entry is
     // safe in that topology. The Compose network address is not loopback, which
     // is why the default known networks/proxies lists must be cleared. A
@@ -154,6 +154,8 @@ app.UseStatusCodePages(async statusCodeContext =>
         }),
         StatusCodes.Status404NotFound => ApiProblem.NotFound("The requested resource was not found."),
         StatusCodes.Status405MethodNotAllowed => ApiProblem.MethodNotAllowed(),
+        StatusCodes.Status413PayloadTooLarge => ApiProblem.PayloadTooLarge(),
+        StatusCodes.Status415UnsupportedMediaType => ApiProblem.UnsupportedMediaType(),
         _ => null,
     };
 

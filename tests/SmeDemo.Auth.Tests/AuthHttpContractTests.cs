@@ -208,6 +208,23 @@ public sealed class AuthHttpContractTests
     }
 
     [TestMethod]
+    public async Task UnsupportedContentType_Returns415Envelope()
+    {
+        using var content = new StringContent(
+            "{\"username\":\"demo\",\"password\":\"Demo_Passw0rd!\"}",
+            Encoding.UTF8,
+            "text/plain");
+
+        using var response = await _client.PostAsync("/auth/login", content);
+
+        AssertProblem(
+            await ReadProblemAsync(response),
+            HttpStatusCode.UnsupportedMediaType,
+            "UNSUPPORTED_MEDIA_TYPE",
+            "/auth/login");
+    }
+
+    [TestMethod]
     public async Task MalformedJson_UnknownRoute_AndWrongMethod_UseTheSharedEnvelope()
     {
         using var malformedContent = new StringContent(

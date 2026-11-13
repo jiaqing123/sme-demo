@@ -46,6 +46,18 @@ public sealed record ApiProblem(
             "The SMS provider is unavailable. Try again shortly.",
             RetryAfter: TimeSpan.FromSeconds(5));
 
+    public static ApiProblem PayloadTooLarge() =>
+        new(
+            StatusCodes.Status413PayloadTooLarge,
+            ErrorCodes.PayloadTooLarge,
+            "The request body is too large.");
+
+    public static ApiProblem UnsupportedMediaType() =>
+        new(
+            StatusCodes.Status415UnsupportedMediaType,
+            ErrorCodes.UnsupportedMediaType,
+            "The request content type is not supported.");
+
     public static ApiProblem Internal() =>
         new(StatusCodes.Status500InternalServerError, ErrorCodes.Internal, "An unexpected error occurred.");
 }

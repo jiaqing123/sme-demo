@@ -16,6 +16,8 @@ public static class ErrorCodes
     /// </summary>
     public const string MethodNotAllowed = "METHOD_NOT_ALLOWED";
 
+    public const string PayloadTooLarge = "PAYLOAD_TOO_LARGE";
+    public const string UnsupportedMediaType = "UNSUPPORTED_MEDIA_TYPE";
     public const string UpstreamUnavailable = "UPSTREAM_UNAVAILABLE";
     public const string RateLimited = "RATE_LIMITED";
     public const string Internal = "INTERNAL";

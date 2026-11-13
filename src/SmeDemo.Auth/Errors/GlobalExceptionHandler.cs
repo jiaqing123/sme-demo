@@ -18,12 +18,11 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         Exception exception,
         CancellationToken cancellationToken)
     {
-        var problem = exception is BadHttpRequestException
-            ? ApiProblem.Validation(new Dictionary<string, string[]>
-            {
-                ["body"] = ["The request body could not be read."],
-            })
-            : ApiProblem.Internal();
+        var problem = exception switch
+        {
+            BadHttpRequestException badRequest => FromBadRequest(badRequest),
+            _ => ApiProblem.Internal(),
+        };
 
         if (problem.StatusCode >= StatusCodes.Status500InternalServerError)
         {
@@ -38,4 +37,20 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
 
         return true;
     }
+
+    /// <summary>
+    /// The framework reports several request-shape failures as
+    /// <see cref="BadHttpRequestException"/> and records the intended status on
+    /// the exception. Preserve 413/415 instead of flattening every one to 400.
+    /// </summary>
+    private static ApiProblem FromBadRequest(BadHttpRequestException exception) =>
+        exception.StatusCode switch
+        {
+            StatusCodes.Status413PayloadTooLarge => ApiProblem.PayloadTooLarge(),
+            StatusCodes.Status415UnsupportedMediaType => ApiProblem.UnsupportedMediaType(),
+            _ => ApiProblem.Validation(new Dictionary<string, string[]>
+            {
+                ["body"] = ["The request body could not be read."],
+            }),
+        };
 }

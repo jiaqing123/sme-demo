@@ -41,6 +41,18 @@ public sealed record ApiProblem(
             ErrorCodes.MethodNotAllowed,
             "The HTTP method is not supported for this resource.");
 
+    public static ApiProblem PayloadTooLarge() =>
+        new(
+            StatusCodes.Status413PayloadTooLarge,
+            ErrorCodes.PayloadTooLarge,
+            "The request body is too large.");
+
+    public static ApiProblem UnsupportedMediaType() =>
+        new(
+            StatusCodes.Status415UnsupportedMediaType,
+            ErrorCodes.UnsupportedMediaType,
+            "The request content type is not supported.");
+
     public static ApiProblem Internal() =>
         new(StatusCodes.Status500InternalServerError, ErrorCodes.Internal, "An unexpected error occurred.");
 
