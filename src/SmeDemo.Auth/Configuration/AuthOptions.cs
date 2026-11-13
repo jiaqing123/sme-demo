@@ -88,7 +88,8 @@ public sealed record AuthOptions(
             KeysPath: Read(configuration, "KEYS_PATH", "/keys"),
             SmsProviderUrl: smsProviderUrl,
             RateLimits: AuthRateLimitOptions.FromConfiguration(configuration),
-            // Compose nginx is the only ingress and sets X-Forwarded-For. Off by
+            // Compose nginx is the only intended browser ingress and sets X-Forwarded-For; the
+            // published 127.0.0.1:8081 debug port is a documented localhost exception. Off by
             // default so a direct deployment cannot be spoofed by a client.
             TrustForwardedHeaders: ReadBool(
                 configuration,

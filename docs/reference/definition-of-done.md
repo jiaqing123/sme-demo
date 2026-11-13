@@ -142,8 +142,8 @@ the merge.
 - [ ] If the change cannot be exercised by the smoke test, say so in the pull
       request and describe the manual check performed.
 
-> **Verification status (2026-11-11):** the full Compose smoke flow passed
-> locally, and two Release builds produced an identical `openapi/v1.json` hash.
-> GitHub Actions has not been executed yet; the Linux `dotnet format` run and the
-> stale-OpenAPI negative path are unverified in CI. Tick the CI boxes only after
-> a real GitHub run.
+> **Verification status (2026-11-13):** the full Compose smoke flow passed
+> locally after the readiness switch, and two Release builds produced an identical
+> `openapi/v1.json` hash. GitHub Actions has not been executed yet; the Linux
+> `dotnet format` run and the stale-OpenAPI negative path are unverified in CI.
+> Tick the CI boxes only after a real GitHub run.

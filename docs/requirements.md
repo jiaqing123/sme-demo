@@ -415,20 +415,23 @@ per-field dictionary:
 | Code | HTTP | When |
 |------|------|------|
 | `VALIDATION_ERROR` | 400 | Malformed body or query, or a validator rejected the request; details in `error.errors`. |
-| `UNAUTHENTICATED` | 401 | Missing or unparseable bearer token. |
+| `UNAUTHENTICATED` | 401 | Missing bearer token. |
 | `TOKEN_EXPIRED` | 401 | `exp` in the past. |
-| `INVALID_TOKEN` | 401 | Signature, `iss`, `aud`, or algorithm mismatch, or a key set cached from an older metadata document. |
+| `INVALID_TOKEN` | 401 | Malformed token, or a signature, `iss`, `aud`, or algorithm mismatch, or a key set cached from an older metadata document. |
 | `FORBIDDEN` | 403 | Token valid but org mismatch or resource not owned. The auth service has no authorisation layer and does not return this code. |
 | `NOT_FOUND` | 404 | Unknown route or unknown resource ID. |
 | `METHOD_NOT_ALLOWED` | 405 | A matched path called with an unsupported verb. Routing rejects it before authentication, so even a protected route returns `405`, never `401`. |
+| `PAYLOAD_TOO_LARGE` | 413 | The request body exceeds the host's limit. |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | A body was sent with a content type the endpoint cannot bind. |
 | `RATE_LIMITED` | 429 | An auth or API fixed-window budget is exhausted, or a challenge is locked after too many attempts. Always carries a numeric `Retry-After`. |
 | `INTERNAL` | 500 | Unhandled failure; the client sees no implementation detail. |
 | `UPSTREAM_UNAVAILABLE` | 503 | A required store, the SMS provider, or the auth metadata/JWKS endpoint is unavailable. Carries `Retry-After: 5`. |
 
 A failed auth metadata/JWKS fetch at the transport layer is
 `503 UPSTREAM_UNAVAILABLE`, not `401 INVALID_TOKEN`; signature, issuer,
-audience, expiry, and algorithm failures remain `401`. Metadata is cached, so a
-stale cache can still reject an unknown key with `401` until it refreshes.
+audience, expiry, and algorithm failures remain `401` when the metadata is
+reachable or its keys are already cached. Metadata is cached, so a stale cache
+can still reject an unknown key with `401` until it refreshes.
 
 `/readyz` is the one error response that is not a ProblemDetails document: its
 `503` is the readiness body (`{"status":"degraded","checks":[...]}`) with
@@ -901,13 +904,13 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 | Variable | Used by | Default |
 |----------|---------|---------|
 | `ORG_ID` | auth, api | `sme` |
-| `DEMO_MODE` | auth, web | `true` |
+| `DEMO_MODE` | auth, web | `false` in auth; `.env.example` and Compose set `true` for the demo |
 | `DEMO_USERNAME` / `DEMO_PASSWORD` | auth, web | demo values; web publishes them only as the `/login` hint |
 | `DEMO_PHONE` | auth | demo value |
 | `DEMO_OTP` | auth, web | `123456`; web publishes it only as the `/login` hint |
 | `JWT_ISSUER` / `JWT_AUDIENCE` / `JWT_TTL` | auth, api | `http://auth:8081`, `sme-demo-api`, `30m` |
 | `AUTH_METADATA_URL` | api | `http://auth:8081/.well-known/openid-configuration` |
-| `SMS_PROVIDER_URL` | auth | `http://sms-mock:8083` |
+| `SMS_PROVIDER_URL` | auth | unset selects the logging provider; Compose sets `http://sms-mock:8083` |
 | `ISSUER_BASE_URL` / `ISSUER_API_KEY` | api | `http://issuer-mock:8084`, `demo-issuer-key` |
 | `ISSUER_SYNC_INTERVAL` | api | `5m` (short forms such as `10s` are accepted) |
 | `ISSUER_SYNC_ENABLED` | api | `true`; `false` does not register the sync worker |
@@ -919,7 +922,7 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 | `DATABASE_URL` (auth/api) | auth, api | Compose-internal DSNs using the app logins |
 | `SME_API_DB_PASSWORD` / `SME_AUTH_DB_PASSWORD` | db-grants, api, auth | `.env` only; grants add `db_datareader` + `db_datawriter` |
 | `CORS_ORIGIN` | auth, api | `http://localhost:8080` |
-| `AUTH_TRUST_FORWARDED_HEADERS` | auth | `false`; Compose sets `true` because nginx is the only ingress and appends `X-Forwarded-For` (§11.3) |
+| `AUTH_TRUST_FORWARDED_HEADERS` | auth | `false`; Compose sets `true` because nginx is the only intended browser ingress and appends `X-Forwarded-For` (the published `127.0.0.1:8081` debug port is a localhost exception, §11.3) |
 | `AUTH_RATE_LIMIT_LOGIN_IP` / `AUTH_RATE_LIMIT_LOGIN_IP_WINDOW` | auth | `20` per `1m` |
 | `AUTH_RATE_LIMIT_LOGIN_ACCOUNT` / `AUTH_RATE_LIMIT_LOGIN_ACCOUNT_WINDOW` | auth | `10` per `5m`, keyed on the normalized username after request validation |
 | `AUTH_RATE_LIMIT_VERIFY_IP` / `AUTH_RATE_LIMIT_VERIFY_IP_WINDOW` | auth | `60` per `1m` |
@@ -1069,7 +1072,7 @@ them is acceptable in an internet-facing deployment.
   not shared across replicas. Production needs a distributed limiter, or
   per-instance limits sized for the replica count.
 - Compose sets `AUTH_TRUST_FORWARDED_HEADERS=true` and trusts a single forwarded
-  hop because nginx is the only ingress. The demo still publishes
+  hop because nginx is the only intended browser ingress. The demo still publishes
   `127.0.0.1:8081`, so a local caller can spoof `X-Forwarded-For` and evade the
   per-IP budgets. Production must scope trusted proxies/networks to the exact
   ingress and must not expose `auth` directly.

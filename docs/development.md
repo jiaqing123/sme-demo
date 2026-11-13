@@ -492,7 +492,7 @@ unknown key until it refreshes; restarting `api` discards the cache.
 ### Forwarded headers
 
 `AUTH_TRUST_FORWARDED_HEADERS` defaults to `false`. Compose sets it to `true`
-because nginx is the only ingress and appends `X-Forwarded-For`, so the per-IP
+because nginx is the only intended browser ingress and appends `X-Forwarded-For`, so the per-IP
 budgets key on the browser address instead of the proxy's. When true the code
 trusts a single forwarded hop and clears the default known proxies/networks,
 because the Compose network address is not loopback.
@@ -855,10 +855,11 @@ your operating system locally.
   `docker compose down -v --remove-orphans`; the CI job remains the required
   Linux proof.
 
-### Verification status (2026-11-11)
+### Verification status (2026-11-13)
 
 - The full Compose smoke flow was run locally against the real stack on
-  2026-11-11 and passed.
+  2026-11-13 after the readiness switch: auth `/healthz`, API `/readyz`, login,
+  verify, the authenticated API call, and the anonymous 401 all passed.
 - A second Release build produced an identical `openapi/v1.json` SHA-256, so the
   build-time generation is deterministic.
 - GitHub Actions itself has not been executed. The Linux `dotnet format` run and

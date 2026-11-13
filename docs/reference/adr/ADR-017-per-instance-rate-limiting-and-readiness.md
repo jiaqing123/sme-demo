@@ -33,7 +33,7 @@ global or enable forwarded headers on a directly reachable service.
    and the Compose smoke script use readiness; `auth` keeps liveness.
 3. **Forwarded-header trust is explicit and Compose-only.**
    `AUTH_TRUST_FORWARDED_HEADERS` defaults to `false`. Compose sets it to `true`
-   because nginx is the only ingress and appends `X-Forwarded-For`; when true the
+   because nginx is the only intended browser ingress and appends `X-Forwarded-For`; when true the
    host trusts one forwarded hop and clears the default known proxies/networks.
    A production deployment must instead scope trusted proxies/networks to the
    exact ingress and must not expose `auth` directly.
