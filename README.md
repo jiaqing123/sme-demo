@@ -76,7 +76,8 @@ The conventions a new service should copy live in
 [Definition of Done](docs/reference/definition-of-done.md), the
 [ADR index](docs/reference/adr/README.md), the
 [add-a-resource cookbook](docs/reference/cookbook-add-resource.md), and the
-[versioning rule](docs/reference/versioning.md). Runtime telemetry, JSON logging,
+[versioning rule](docs/reference/versioning.md). The change, weekly security, and
+release cadence is in [`docs/delivery.md`](docs/delivery.md). Runtime telemetry, JSON logging,
 and `X-Request-Id` correlation are described in
 [`docs/observability.md`](docs/observability.md); incident, key-rotation,
 rollback, and restore procedures are in

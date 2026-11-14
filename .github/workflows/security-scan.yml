@@ -1,0 +1,90 @@
+name: Container security scan
+
+# New CVEs are published against packages that were already built, so neither a
+# push nor a pull request is guaranteed to happen when an image becomes
+# vulnerable. This schedule rescans the images the repository would ship even
+# when no commit has been made.
+on:
+  schedule:
+    - cron: "0 3 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: container-security-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Rebuild and scan container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      # The build commands intentionally duplicate the `images` job in ci.yml:
+      # the repository has no always-on registry yet, so a scheduled run has to
+      # rebuild the images from the current commit before scanning them. Keep
+      # this step in sync with ci.yml and azure-pipelines.yml until a shared
+      # reusable workflow or script owns the image build.
+      #
+      # Build context is the repository root for every image; the shared
+      # Directory.Build.props/Directory.Packages.props and the web lock file are
+      # copied by the Dockerfiles themselves.
+      - name: Build images
+        run: |
+          set -euo pipefail
+          docker build --file src/SmeDemo.Api/Dockerfile \
+            --tag "sme-demo-api:${GITHUB_SHA}" .
+          docker build --file src/SmeDemo.Auth/Dockerfile \
+            --tag "sme-demo-auth:${GITHUB_SHA}" .
+          docker build --file web/Dockerfile \
+            --tag "sme-demo-web:${GITHUB_SHA}" .
+          docker build --file tools/SmsMock/Dockerfile \
+            --tag "sme-demo-sms-mock:${GITHUB_SHA}" .
+          docker build --file tools/IssuerMock/Dockerfile \
+            --tag "sme-demo-issuer-mock:${GITHUB_SHA}" .
+          docker build --file tools/Migrator/Dockerfile \
+            --tag "sme-demo-migrator:${GITHUB_SHA}" .
+
+      # Pinned and checksum-verified, matching the `images` job in ci.yml and
+      # azure-pipelines.yml. Keep TRIVY_VERSION and TRIVY_SHA256 identical in all
+      # three files until the shared reusable workflow or script exists.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.76.2"
+          TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" trivy
+
+      # No SBOMs here: the per-PR `images` job in ci.yml already generates and
+      # uploads the CycloneDX inventory. This workflow owns the vulnerability
+      # gate only.
+      #
+      # Fixed vulnerabilities at HIGH or CRITICAL fail the run. --ignore-unfixed
+      # keeps the gate to findings a rebuild can fix; it also filters unfixed
+      # findings out of the output. Run a separate scan without the flag if the
+      # unfixed inventory is needed for the risk register.
+      - name: Scan images for vulnerabilities
+        run: |
+          set -euo pipefail
+          for image in api auth web sms-mock issuer-mock migrator; do
+            "$RUNNER_TEMP/trivy" image \
+              --scanners vuln --timeout 15m \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              "sme-demo-${image}:${GITHUB_SHA}"
+          done
+
+      # GitHub disables scheduled workflows after 60 days without repository
+      # activity. Re-enable the workflow from the Actions tab, or run it once
+      # manually with workflow_dispatch, to restore the schedule.

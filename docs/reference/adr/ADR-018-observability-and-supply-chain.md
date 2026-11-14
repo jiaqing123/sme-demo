@@ -147,11 +147,12 @@ that relaxation in the CLI stack.
   path must be added deliberately. Debugging is the documented exception:
   `docker-compose.vs.debug.yml` is less hardened than the CLI stack.
 - Image scanning is only as complete as the image inventory and the digest
-  pins. Unfixed base-image CVEs are reported but do not fail the build; if a
-  fixable finding has to be accepted, it must be recorded in a time-boxed
-  `.trivyignore.yaml` with an expiry and an owner, and revisited before that
-  date. No ignore file is needed today: all six images scan clean. An ignore
-  without an expiry is not an accepted risk.
+  pins. The gate uses `--ignore-unfixed`, so it fails only on findings a rebuild
+  can fix; unfixed CVEs are filtered out of the output rather than reported and
+  tracked here. If a fixable finding has to be accepted, it must be recorded in
+  a time-boxed `.trivyignore.yaml` with an expiry and an owner, and revisited
+  before that date. No ignore file is needed today: all six images scan clean.
+  An ignore without an expiry is not an accepted risk.
 - The `1 MiB` body ceiling is a product limit as well as a hardening control.
   A future upload feature must raise `MAX_REQUEST_BODY_BYTES` and the nginx
   limit together, or it will fail with `413`.

@@ -71,6 +71,9 @@ The full PR checklist is [`definition-of-done.md`](definition-of-done.md).
   Accepted without a new decision record.
 - **Running the stack and CI:** [`../development.md`](../development.md) has the
   commands, the schema workflow, the OpenAPI workflow, and the CI job list.
+- **Choosing when to gate, scan, or release:** [`../delivery.md`](../delivery.md)
+  has the change, weekly, and release loops, including the branch-protection
+  checklist.
 
 ## 4. File map
 
@@ -89,6 +92,7 @@ Normative sources outside this directory:
 | [`../requirements.md`](../requirements.md) | System requirements and architecture. A reference document must not contradict it. |
 | [`../threat-model.md`](../threat-model.md) | Security release gate: assets, trust boundaries, abuse cases, demo exceptions. |
 | [`../development.md`](../development.md) | How to build, migrate, run, and reproduce CI locally. |
+| [`../delivery.md`](../delivery.md) | When the gates run: every change, weekly security review, and the release checklist. Also the tool-independent operating model. |
 | [`../native-di-dispatch.md`](../native-di-dispatch.md) | Team standard for command/query dispatch. |
 | [`../licensing.md`](../licensing.md) | Third-party licensing and the internal-repository distribution position. |
 | [`../../tests/SmeDemo.Architecture.Tests`](../../tests/SmeDemo.Architecture.Tests) | Executable architecture rules: layering, endpoint purity, endpoint metadata, auth metadata. |
@@ -100,8 +104,9 @@ Normative sources outside this directory:
 The baseline changes with the code. When a document here and the code disagree,
 the code and the normative documents above win; fix the reference document in the
 same pull request. The CI pipeline that proves the baseline is described in
-[`../development.md`](../development.md). GitHub Actions has run the earlier
-pipeline green (run #8 at `ee9554b`); the image-build and Compose smoke-test jobs
-are still CI-only in the sense that they are not part of the everyday local loop.
-The updated workflow for the observability/supply-chain change had not run on
-GitHub when this was written; check the latest run before quoting a status.
+[`../development.md`](../development.md), and the cadence is in
+[`../delivery.md`](../delivery.md). GitHub Actions ran all five jobs green for
+the latest change before this document was updated (run `43566055703` at
+`d020a1e`). The image-build and Compose smoke-test jobs are CI-only in the sense
+that they are not part of the everyday local loop. Check the latest run before
+quoting a status.

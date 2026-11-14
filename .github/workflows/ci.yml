@@ -232,9 +232,10 @@ jobs:
           path: ${{ runner.temp }}/sbom/*.cdx.json
           if-no-files-found: error
 
-      # Fixed vulnerabilities at HIGH or CRITICAL fail the build. Unfixed ones
-      # are reported in the log but do not block: no rebuild can remove them and
-      # they belong in the risk register, not in a red pipeline.
+      # Fixed vulnerabilities at HIGH or CRITICAL fail the build. --ignore-unfixed
+      # keeps the gate to findings a rebuild can fix; it also filters unfixed
+      # findings out of the output. Run a separate scan without the flag if the
+      # unfixed inventory is needed for the risk register.
       - name: Scan images for vulnerabilities
         run: |
           set -euo pipefail

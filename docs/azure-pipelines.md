@@ -5,7 +5,8 @@ This document describes the Azure Pipelines delivery pipeline in
 Actions workflow in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
 GitHub Actions remains the fast pull-request feedback loop, while Azure
 Pipelines is intended to become the formal build, environment promotion, and
-release pipeline.
+release pipeline. The cadence, promotion-by-digest rules, and release checklist
+are in [`delivery.md`](delivery.md); this document describes the pipeline wiring.
 
 The Build stage is fully implemented and mirrors the GitHub Actions gates. The
 Test, UAT, and Production stages are deliberately safe placeholders: they are
@@ -361,9 +362,10 @@ packages are not cached.
   disable the default rule set.
 - **Images** are scanned with Trivy 0.76.2 when they are built locally
   (`publishImages=false`), also pinned and checksum-verified. Fixable `HIGH` and
-  `CRITICAL` findings fail the build; unfixed findings are logged but do not
-  block. A CycloneDX SBOM is generated for every image and published as the
-  `sboms` artifact before the gate runs. When images are pushed to ACR, these
+  `CRITICAL` findings fail the build; `--ignore-unfixed` also filters unfixed
+  findings out of the output, so this gate is not their inventory. A CycloneDX
+  SBOM is generated for every image and published as the `sboms` artifact before
+  the gate runs. When images are pushed to ACR, these
   local scan steps do not run; the promoted digest still needs a registry-side
   scan.
 - **Supply chain pinning** has two layers. The .NET SDK is pinned in

@@ -7,7 +7,8 @@
 Run this list before opening a pull request and again before merging. A box that
 does not apply is ticked with a one-line reason in the pull request, not silently
 skipped. The security section is a release gate: an unchecked security box blocks
-the merge.
+the merge. This is the per-change checklist; the weekly review and the separate
+release checklist are in [`../delivery.md`](../delivery.md).
 
 ## 1. Build and tests
 
@@ -148,9 +149,8 @@ the merge.
 - [ ] If the change cannot be exercised by the smoke test, say so in the pull
       request and describe the manual check performed.
 
-> **Verification status (2026-11-14):** the full hardened Compose stack passed
-> the smoke checks locally, `X-Request-Id` and JSON logs were verified, the
-> read-only root filesystem was enforced, and all six images scanned clean under
-> the Trivy gate. GitHub Actions ran green for PR 2, run #8 at `ee9554b`; the
-> updated workflow has not yet run on GitHub for this change, and Azure
-> Pipelines has not been queued. Tick the CI boxes only after the relevant run.
+> **CI evidence:** do not tick a CI box from a local run. The latest green
+> `main` run is visible in the repository's Actions tab; the PR 4 container
+> hardening run was `43566055703` at `d020a1e`. If the change under review has
+> not run in CI yet, leave the box unchecked and say so in the pull request.
+> Azure Pipelines has not been queued for this demo.

@@ -683,6 +683,11 @@ on demand. It has five jobs:
 Both scanner downloads — gitleaks and Trivy — are pinned to an exact version and
 verified by SHA-256 before the binary runs.
 
+A second workflow, `.github/workflows/security-scan.yml`, runs the same
+image-build and Trivy gate on a weekly schedule (and on demand). It exists
+because a new base-image CVE appears without a commit. The full change, weekly,
+and release cadence is in [`delivery.md`](delivery.md).
+
 The `dotnet`, `web`, and `compose` jobs need no SQL Server, Azurite, or SMS
 container: the API tests replace the repositories and storage with fakes, the
 auth tests use EF InMemory, and the frontend tests run in jsdom.
@@ -775,9 +780,10 @@ trivy image --scanners vuln --timeout 15m \
   --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 <image>
 ```
 
-Unfixed findings are reported in the log but do not fail the job: no rebuild can
-remove them, so they belong in the risk register rather than a red pipeline. On
-2026-11-14 all six images scanned clean locally. Like gitleaks, Trivy is
+`--ignore-unfixed` means unfixed findings are filtered out of this gate: it fails
+only on findings a rebuild can fix, and it is not an inventory of unfixed CVEs.
+Run a separate scan without the flag if that inventory is needed for the risk
+register. On 2026-11-14 all six images scanned clean locally. Like gitleaks, Trivy is
 downloaded from a pinned release and checksum-verified:
 
 | Variable | Value |
@@ -1007,8 +1013,9 @@ your operating system locally.
 - The five .NET images were rebuilt on chiseled `-extra` bases and checked for
   no shell, no package manager, no `curl`, a working `/healthprobe`, and an
   auth-keys volume owned by `1654:1654`. This was a local real-stack verification
-  before the pull request was opened; GitHub Actions has not yet run for it.
-- GitHub Actions was green for PR 3 (`43553676907` at `eb96829` and
+  before the pull request was opened; GitHub Actions run `43566055703` at
+  `d020a1e` then passed all five jobs.
+- GitHub Actions was also green for PR 3 (`43553676907` at `eb96829` and
   `43560262538` at `bd33c08`); Azure Pipelines has not been queued.
 
 ## Everyday commands
