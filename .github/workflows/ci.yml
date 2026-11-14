@@ -26,10 +26,12 @@ jobs:
       - name: Check out
         uses: actions/checkout@v4
 
+      # The SDK version comes from global.json, so the toolchain is the same one
+      # developers and the Dockerfiles use.
       - name: Set up .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          global-json-file: global.json
 
       - name: Restore local tools
         run: dotnet tool restore
@@ -168,9 +170,9 @@ jobs:
         run: docker compose config -q
 
   images:
-    name: Build container images
+    name: Build and scan container images
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - name: Check out
         uses: actions/checkout@v4
@@ -193,6 +195,57 @@ jobs:
             --tag "sme-demo-issuer-mock:${GITHUB_SHA}" .
           docker build --file tools/Migrator/Dockerfile \
             --tag "sme-demo-migrator:${GITHUB_SHA}" .
+
+      # Pinned and checksum-verified like gitleaks. Trivy scans the OS packages
+      # and application libraries inside each built image, which is what is
+      # actually promoted, not just the NuGet graph.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.76.2"
+          TRIVY_SHA256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/trivy.tar.gz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  ${archive}" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" trivy
+
+      # SBOMs are build artefacts: they are generated for every image before the
+      # vulnerability gate so a failing scan still leaves the inventory behind.
+      - name: Generate CycloneDX SBOMs
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/sbom"
+          for image in api auth web sms-mock issuer-mock migrator; do
+            "$RUNNER_TEMP/trivy" image \
+              --scanners vuln --timeout 15m \
+              --format cyclonedx \
+              --output "$RUNNER_TEMP/sbom/sme-demo-${image}.cdx.json" \
+              "sme-demo-${image}:${GITHUB_SHA}"
+          done
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@v4
+        with:
+          name: sboms
+          path: ${{ runner.temp }}/sbom/*.cdx.json
+          if-no-files-found: error
+
+      # Fixed vulnerabilities at HIGH or CRITICAL fail the build. Unfixed ones
+      # are reported in the log but do not block: no rebuild can remove them and
+      # they belong in the risk register, not in a red pipeline.
+      - name: Scan images for vulnerabilities
+        run: |
+          set -euo pipefail
+          for image in api auth web sms-mock issuer-mock migrator; do
+            "$RUNNER_TEMP/trivy" image \
+              --scanners vuln --timeout 15m \
+              --severity HIGH,CRITICAL \
+              --ignore-unfixed \
+              --exit-code 1 \
+              "sme-demo-${image}:${GITHUB_SHA}"
+          done
 
   compose-smoke:
     name: Compose smoke test

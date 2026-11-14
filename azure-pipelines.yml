@@ -46,8 +46,11 @@ parameters:
     default: false
 
 variables:
-  dotnetVersion: "10.0.x"
+  # Keep in step with global.json; the GitHub workflow reads that file directly.
+  dotnetVersion: "10.0.404"
   nodeVersion: "22.x"
+  trivyVersion: "0.76.2"
+  trivySha256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
   # One immutable tag per build; the same tag is promoted through every
   # environment. $(Build.BuildId) is also pushed for readability in ACR.
   imageTag: $(Build.SourceVersion)
@@ -305,6 +308,49 @@ stages:
                   docker build --file tools/Migrator/Dockerfile \
                     --tag "sme-demo-migrator:$(imageTag)" .
                 displayName: Build local images
+
+          # The scan runs against the locally built images, so it is skipped
+          # when publishing to ACR (Docker@2 pushes without keeping local tags).
+          # Pinned and checksum-verified, matching the GitHub workflow.
+          - ${{ if eq(parameters.publishImages, false) }}:
+              - bash: |
+                  set -euo pipefail
+                  archive="$(Agent.TempDirectory)/trivy.tar.gz"
+                  curl -fsSL --retry 3 -o "$archive" \
+                    "https://github.com/aquasecurity/trivy/releases/download/v$(trivyVersion)/trivy_$(trivyVersion)_Linux-64bit.tar.gz"
+                  echo "$(trivySha256)  ${archive}" | sha256sum --check --strict
+                  tar -xzf "$archive" -C "$(Agent.TempDirectory)" trivy
+                displayName: Install Trivy
+
+              - bash: |
+                  set -euo pipefail
+                  mkdir -p "$(Agent.TempDirectory)/sbom"
+                  for image in api auth web sms-mock issuer-mock migrator; do
+                    "$(Agent.TempDirectory)/trivy" image \
+                      --scanners vuln --timeout 15m \
+                      --format cyclonedx \
+                      --output "$(Agent.TempDirectory)/sbom/sme-demo-${image}.cdx.json" \
+                      "sme-demo-${image}:$(imageTag)"
+                  done
+                displayName: Generate CycloneDX SBOMs
+
+              - task: PublishPipelineArtifact@1
+                displayName: Publish SBOMs
+                inputs:
+                  targetPath: "$(Agent.TempDirectory)/sbom"
+                  artifact: sboms
+
+              - bash: |
+                  set -euo pipefail
+                  for image in api auth web sms-mock issuer-mock migrator; do
+                    "$(Agent.TempDirectory)/trivy" image \
+                      --scanners vuln --timeout 15m \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --exit-code 1 \
+                      "sme-demo-${image}:$(imageTag)"
+                  done
+                displayName: Scan images for vulnerabilities
 
       - job: ComposeSmoke
         displayName: Compose smoke test

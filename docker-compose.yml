@@ -6,13 +6,37 @@ name: sme-demo
 # `sme` network and their healthchecks run inside the container, so nothing in
 # the stack depends on the host bindings. Override these mappings locally if a
 # remote browser or device has to reach a service.
+
+# Shared runtime hardening for the .NET services and the unprivileged nginx.
+# The root filesystem is immutable; /tmp is the only writable scratch space
+# (ASP.NET Core, curl healthchecks and nginx pid/cache files use it). The auth
+# signing keys are the one exception: they live on the auth-keys volume.
+x-hardened: &hardened
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  tmpfs:
+    - /tmp:size=64m,mode=1777
+
 services:
   mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
     environment:
       ACCEPT_EULA: "Y"
       MSSQL_PID: "Developer"
       MSSQL_SA_PASSWORD: "${MSSQL_SA_PASSWORD:?create .env from .env.example}"
+    # SQL Server keeps its data on the mssql-data volume and its entrypoint
+    # needs to chown that volume before dropping to the mssql user, so only the
+    # privilege-escalation guard and a memory ceiling are applied here.
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2g
     healthcheck:
       test:
         - "CMD-SHELL"
@@ -33,6 +57,7 @@ services:
       context: .
       dockerfile: tools/Migrator/Dockerfile
     image: sme-demo-migrator:local
+    <<: *hardened
     environment:
       DATABASE_URL: "Server=mssql;Database=sme_api;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
       MIGRATIONS_PATH: /app/migrations/api
@@ -41,6 +66,11 @@ services:
       mssql:
         condition: service_healthy
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
     networks:
       - sme
 
@@ -51,6 +81,7 @@ services:
       context: .
       dockerfile: tools/Migrator/Dockerfile
     image: sme-demo-migrator:local
+    <<: *hardened
     environment:
       DATABASE_URL: "Server=mssql;Database=sme_auth;User Id=sa;Password=${MSSQL_SA_PASSWORD};TrustServerCertificate=True"
       MIGRATIONS_PATH: /app/migrations/auth
@@ -59,6 +90,11 @@ services:
       mssql:
         condition: service_healthy
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
     networks:
       - sme
 
@@ -67,7 +103,7 @@ services:
   # acceptance 15). No DDL rights are granted. Passwords come from .env via
   # sqlcmd variables, never from an image or this file.
   db-grants:
-    image: mcr.microsoft.com/mssql/server:2022-latest
+    image: mcr.microsoft.com/mssql/server:2022-latest@sha256:4525e3efac9f3e241cb003bb2ff2a82818b502f37e12049d788b1a9fa7e13b7f
     entrypoint: ["/bin/bash", "-c"]
     command:
       - >-
@@ -89,13 +125,21 @@ services:
       db-migrator-auth:
         condition: service_completed_successfully
     restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 256m
     networks:
       - sme
 
   # Table Storage for the transaction feed and Blob Storage for card artwork.
   # Ports stay internal; only the API can reach them.
   azurite:
-    image: mcr.microsoft.com/azure-storage/azurite
+    image: mcr.microsoft.com/azure-storage/azurite@sha256:830430c1da1a2d537e08f3e6764dd1f5ae00cf0346bcaf625b968ec3f0971fd5
+    <<: *hardened
     command:
       - "azurite"
       - "--blobHost"
@@ -127,6 +171,11 @@ services:
       timeout: 10s
       retries: 30
       start_period: 120s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
     networks:
       - sme
 
@@ -135,8 +184,12 @@ services:
       context: .
       dockerfile: src/SmeDemo.Auth/Dockerfile
     image: sme-demo-auth:local
+    <<: *hardened
     environment:
       ASPNETCORE_URLS: "http://+:8081"
+      # One JSON object per line so `docker compose logs` is machine-readable.
+      # Local `dotnet run` keeps the human-readable default.
+      LOG_FORMAT: "json"
       DATABASE_URL: "Server=mssql;Database=sme_auth;User Id=sme_auth_app;Password=${SME_AUTH_DB_PASSWORD:?set SME_AUTH_DB_PASSWORD in .env};TrustServerCertificate=True"
       ORG_ID: "${ORG_ID:-sme}"
       DEMO_MODE: "${DEMO_MODE:-true}"
@@ -176,6 +229,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 384m
     networks:
       - sme
 
@@ -187,6 +245,7 @@ services:
       context: .
       dockerfile: tools/SmsMock/Dockerfile
     image: sme-demo-sms-mock:local
+    <<: *hardened
     environment:
       ASPNETCORE_URLS: "http://+:8083"
     ports:
@@ -199,6 +258,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 192m
     networks:
       - sme
 
@@ -209,6 +273,7 @@ services:
       context: .
       dockerfile: tools/IssuerMock/Dockerfile
     image: sme-demo-issuer-mock:local
+    <<: *hardened
     environment:
       ASPNETCORE_URLS: "http://+:8084"
       ISSUER_API_KEY: "${ISSUER_API_KEY:-demo-issuer-key}"
@@ -222,6 +287,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 192m
     networks:
       - sme
 
@@ -230,9 +300,11 @@ services:
       context: .
       dockerfile: src/SmeDemo.Api/Dockerfile
     image: sme-demo-api:local
+    <<: *hardened
     environment:
       ASPNETCORE_URLS: "http://+:8082"
       ASPNETCORE_ENVIRONMENT: "Development"
+      LOG_FORMAT: "json"
       DATABASE_URL: "Server=mssql;Database=sme_api;User Id=sme_api_app;Password=${SME_API_DB_PASSWORD:?set SME_API_DB_PASSWORD in .env};TrustServerCertificate=True"
       ORG_ID: "${ORG_ID:-sme}"
       JWT_ISSUER: "${JWT_ISSUER:-http://auth:8081}"
@@ -283,36 +355,47 @@ services:
       timeout: 10s
       retries: 18
       start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512m
     networks:
       - sme
 
-  # React SPA built to static assets and served by nginx on 8080. nginx also
-  # reverse-proxies /auth and /api so the browser only ever talks to one origin
-  # (requirements §9.1). /config.js is generated at container start from the
-  # DEMO_* values below.
+  # React SPA built to static assets and served by the unprivileged nginx image
+  # on container port 8080. nginx also reverse-proxies /auth and /api so the
+  # browser only ever talks to one origin (requirements §9.1). /config.js is
+  # generated at container start from the DEMO_* values below.
   web:
     build:
       context: .
       dockerfile: web/Dockerfile
     image: sme-demo-web:local
+    <<: *hardened
     environment:
       DEMO_MODE: "${DEMO_MODE:-true}"
       DEMO_USERNAME: "${DEMO_USERNAME:-demo}"
       DEMO_PASSWORD: "${DEMO_PASSWORD:-Demo_Passw0rd!}"
       DEMO_OTP: "${DEMO_OTP-123456}"
     ports:
-      - "127.0.0.1:8080:80"
+      - "127.0.0.1:8080:8080"
     depends_on:
       auth:
         condition: service_healthy
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128m
     networks:
       - sme
 

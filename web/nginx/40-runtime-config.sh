@@ -5,7 +5,7 @@
 # hints at all.
 set -eu
 
-config_path="/usr/share/nginx/html/config.js"
+config_path="/tmp/config.js"
 
 # JSON-escape a value: backslash first, then double quote. Newlines (never part
 # of a demo credential) are removed rather than emitted into invalid JS.

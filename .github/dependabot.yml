@@ -1,0 +1,120 @@
+version: 2
+
+# Dependency updates are grouped so a patch wave produces one pull request per
+# ecosystem instead of one per package. The NuGet entry understands central
+# package management (Directory.Packages.props).
+updates:
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      microsoft:
+        patterns:
+          - "Microsoft.*"
+      opentelemetry:
+        patterns:
+          - "OpenTelemetry*"
+      other:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "Microsoft.*"
+          - "OpenTelemetry*"
+
+  - package-ecosystem: npm
+    directory: "/web"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      web:
+        patterns:
+          - "*"
+
+  # Every image is pinned by digest in the Dockerfiles and docker-compose.yml.
+  # Dependabot moves the tag and the digest together; a digest-only change is
+  # how a rebuilt base image (for example a patched aspnet:10.0) arrives.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      compose-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: "/src/SmeDemo.Api"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      api-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: "/src/SmeDemo.Auth"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      auth-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: "/web"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      web-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: "/tools/IssuerMock"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      issuer-mock-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: "/tools/SmsMock"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      sms-mock-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: "/tools/Migrator"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      migrator-images:
+        patterns:
+          - "*"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - "*"

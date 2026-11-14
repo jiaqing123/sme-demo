@@ -9,6 +9,11 @@
 # bin/Debug/net10.0. Visual Studio's generated file leaves the assembly path
 # empty for this solution, so it is set explicitly here. If a project's target
 # framework changes, update the two paths below.
+#
+# The debugger needs a writable filesystem and ptrace, so the CLI hardening from
+# docker-compose.yml (read_only + cap_drop ALL) is relaxed for these two
+# services only. `docker compose up` never reads this file, so the CLI stack
+# stays hardened.
 
 services:
   api:
@@ -16,6 +21,9 @@ services:
       target: base
       args:
         BUILD_CONFIGURATION: Debug
+    read_only: false
+    cap_add:
+      - SYS_PTRACE
     labels:
       com.microsoft.visualstudio.debuggee.arguments: '--additionalProbingPath /.nuget/packages --additionalProbingPath /.nuget/fallbackpackages --additionalProbingPath /.nuget/fallbackpackages2 "/app/bin/Debug/net10.0/SmeDemo.Api.dll"'
 
@@ -24,5 +32,8 @@ services:
       target: base
       args:
         BUILD_CONFIGURATION: Debug
+    read_only: false
+    cap_add:
+      - SYS_PTRACE
     labels:
       com.microsoft.visualstudio.debuggee.arguments: '--additionalProbingPath /.nuget/packages --additionalProbingPath /.nuget/fallbackpackages --additionalProbingPath /.nuget/fallbackpackages2 "/app/bin/Debug/net10.0/SmeDemo.Auth.dll"'
