@@ -194,6 +194,13 @@ them once (GitHub branch protection or a ruleset for `main`):
 Until these are enabled, CI green is a convention, not an enforced gate. Check
 the actual settings before claiming the repository is protected.
 
+If you prefer to apply them from a terminal instead of the UI, run
+[`tools/setup/apply-branch-protection.sh`](../tools/setup/apply-branch-protection.sh)
+with a token that can administer the repository. Start with `--dry-run` to print
+the two payloads; the script then applies the `main` rule and the `v*` tag
+ruleset and verifies both. It repeats the five check names, so renaming a
+workflow job requires updating both the script and this section.
+
 GitHub Actions should keep the default `GITHUB_TOKEN` read-only. No workflow in
 this repository needs write access to repository contents today.
 
@@ -213,11 +220,14 @@ the release path depends on it.
 | How do I operate/roll back? | [`runbook.md`](runbook.md) |
 | How is the Azure line wired? | [`azure-pipelines.md`](azure-pipelines.md) |
 | What is the system contract? | [`requirements.md`](requirements.md) |
+| What are we planning next, and why? | [`plans/README.md`](plans/README.md) |
+| What did earlier handoffs say? | [`history/README.md`](history/README.md) (frozen) |
 
 `progress/` is git-ignored and is **not** a delivery record. Handoffs, chat
-transcripts, and agent memory are convenience, not evidence. If a decision or a
-runbook step matters, it belongs in `docs/`, an ADR, a workflow, or the release
-record.
+transcripts, and agent memory are convenience, not evidence. The PR-by-PR
+handoffs worth keeping are archived under [`history/`](history/README.md); if a
+decision or a runbook step matters, it belongs in `docs/`, an ADR, a workflow, or
+the release record.
 
 A new engineer, or a different coding agent, can continue with this sequence:
 

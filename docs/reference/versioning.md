@@ -19,7 +19,7 @@ public const string Prefix = "/api/" + Version;
 [`ApiRoutes.cs`](../../src/SmeDemo.Api/Endpoints/ApiRoutes.cs) is the only source
 of the prefix. Endpoint files use `ApiRoutes.Prefix` for the group; the
 `art_url` exception is tracked as a P1 in the
-[handoff](../../progress/archive/handoff-reference-baseline.md) §5.3 and must
+[handoff](../history/handoff-reference-baseline.md) §5.3 and must
 move to the API route constant or `LinkGenerator` when it is fixed. Do not add a second
 literal `/api/v1` string in new code.
 
