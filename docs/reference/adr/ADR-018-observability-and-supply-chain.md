@@ -72,7 +72,10 @@ that relaxation in the CLI stack.
   directory (the root Compose file plus `src/SmeDemo.Api`, `src/SmeDemo.Auth`,
   `web`, `tools/IssuerMock`, `tools/SmsMock`, and `tools/Migrator`). Updates are
   weekly on Monday and grouped so a patch wave produces a small, fixed number of
-  pull requests per ecosystem instead of one per package.
+  pull requests per ecosystem instead of one per package. Docker major versions
+  are ignored: a new .NET, Node or nginx major changes the runtime contract and
+  is a separate work item; patch and digest updates inside the current major are
+  still proposed.
 - Every base image is pinned by tag and digest, in the Dockerfiles and in
   `docker-compose.yml`. Dependabot moves the tag and the digest together; a
   digest-only change is how a rebuilt base image arrives.

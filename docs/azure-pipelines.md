@@ -191,7 +191,9 @@ runs weekly on Monday and opens grouped pull requests for NuGet, npm under
 `/web`, `github-actions`, and Docker in the root Compose file plus every
 Dockerfile directory. Those pull requests then run through the same Build gates;
 the digest-pinned base images move by Dependabot pull request rather than by a
-manual edit.
+manual edit. Docker major versions are ignored on purpose: a new .NET, Node or
+nginx major changes the runtime contract and is handled as a separate work item,
+while patch and digest updates inside the current major are still proposed.
 
 ## Deployment stages
 

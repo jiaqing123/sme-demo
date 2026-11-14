@@ -38,12 +38,23 @@ updates:
   # Every image is pinned by digest in the Dockerfiles and docker-compose.yml.
   # Dependabot moves the tag and the digest together; a digest-only change is
   # how a rebuilt base image (for example a patched aspnet:10.0) arrives.
+  #
+  # Major runtime jumps (dotnet 10 -> 11, node 22 -> 25, nginx 1.x -> 2.x) are
+  # not dependency bumps: they change the target framework, the Node runtime the
+  # lock file was built for, or the nginx configuration contract. They are
+  # handled as explicit work items with the full build, scan and smoke gates, so
+  # they are ignored here. Patch and digest updates inside the current major
+  # still arrive weekly.
   - package-ecosystem: docker
     directory: "/"
     schedule:
       interval: weekly
       day: monday
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       compose-images:
         patterns:
@@ -54,6 +65,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       api-images:
         patterns:
@@ -64,6 +80,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       auth-images:
         patterns:
@@ -74,6 +95,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       web-images:
         patterns:
@@ -84,6 +110,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       issuer-mock-images:
         patterns:
@@ -94,6 +125,11 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       sms-mock-images:
         patterns:
@@ -104,11 +140,18 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
     groups:
       migrator-images:
         patterns:
           - "*"
 
+  # Actions major upgrades are reviewed like code changes: the pull request
+  # itself runs the updated workflow, so a broken major fails before it lands.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

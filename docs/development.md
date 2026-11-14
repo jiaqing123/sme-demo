@@ -794,6 +794,14 @@ Compose file plus every Dockerfile directory (`/src/SmeDemo.Api`,
 Dockerfiles and `docker-compose.yml`; Dependabot moves the tag and digest
 together, and a digest-only change is how a rebuilt base image arrives.
 
+Major runtime jumps are deliberately excluded from the Docker entries: moving
+`dotnet` 10 → 11, `node` 22 → 25 or `nginx` 1.x → 2.x changes the target
+framework, the lock file's native binaries, or the nginx configuration contract.
+Those are separate work items that must pass the full build, image scan and
+Compose smoke gates. Patch and digest updates inside the current major still
+arrive weekly, and a major action upgrade is reviewed in a pull request that runs
+the updated workflow.
+
 ### Compose smoke test
 
 The `compose-smoke` job prepares `.env` and starts the minimal set with `--build`:
