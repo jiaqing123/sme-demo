@@ -24,12 +24,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # The SDK version comes from global.json, so the toolchain is the same one
       # developers and the Dockerfiles use.
       - name: Set up .NET
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           global-json-file: global.json
 
@@ -135,10 +135,10 @@ jobs:
         working-directory: web
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -161,7 +161,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Prepare compose environment
         run: cp .env.example .env
@@ -175,7 +175,7 @@ jobs:
     timeout-minutes: 50
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Build context is the repository root for every image; the shared
       # Directory.Build.props/Directory.Packages.props and the web lock file are
@@ -226,7 +226,7 @@ jobs:
           done
 
       - name: Upload SBOMs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sboms
           path: ${{ runner.temp }}/sbom/*.cdx.json
@@ -253,7 +253,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Prepare compose environment
         run: cp .env.example .env
