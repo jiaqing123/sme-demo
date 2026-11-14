@@ -6,6 +6,8 @@ using SmeDemo.Auth.Challenges;
 using SmeDemo.Auth.Configuration;
 using SmeDemo.Auth.Endpoints;
 using SmeDemo.Auth.Errors;
+using SmeDemo.Auth.Http;
+using SmeDemo.Auth.Observability;
 using SmeDemo.Auth.Persistence;
 using SmeDemo.Auth.RateLimiting;
 using SmeDemo.Auth.Security;
@@ -13,6 +15,15 @@ using SmeDemo.Auth.Services;
 using SmeDemo.Auth.Sms;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.AddSmeDemoLogging();
+builder.AddSmeDemoTelemetry(Telemetry.ServiceName);
+
+// Explicit body ceiling: auth only accepts small JSON documents. The default
+// matches the nginx edge (1 MiB); an invalid value fails startup.
+builder.WebHost.ConfigureKestrel(kestrel =>
+    kestrel.Limits.MaxRequestBodySize = RequestBodyLimit.Resolve(
+        builder.Configuration["MAX_REQUEST_BODY_BYTES"]));
 
 // Development already validates the container at build time; apply the same
 // fail-fast checks in every environment so a Production-only dependency error
@@ -117,6 +128,10 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
 
 var app = builder.Build();
+
+// First in the pipeline so every response, including the 401/404/413/429/500
+// envelopes written by later middleware, carries X-Request-Id.
+app.UseMiddleware<RequestIdMiddleware>();
 
 // Every auth response (discovery, JWKS, health, login and the shared error
 // envelope) must reject MIME sniffing. OnStarting keeps the header on a

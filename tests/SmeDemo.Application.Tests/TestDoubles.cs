@@ -57,6 +57,12 @@ internal sealed class FakeTransactionStore : ITransactionStore
     }
 }
 
+internal sealed class FakeCardArtUrlProvider : ICardArtUrlProvider
+{
+    public string GetArtUrl(Guid cardId) =>
+        $"http://localhost:8082/api/v1/cards/{cardId}/art";
+}
+
 internal static class TestData
 {
     public static readonly Guid UserId = Guid.Parse("7f3c2a10-0000-4000-8000-000000000001");
@@ -94,5 +100,5 @@ internal static class TestData
             "{}");
     }
 
-    public static ApplicationOptions Options() => new("http://localhost:8082");
+    public static ICardArtUrlProvider ArtUrlProvider() => new FakeCardArtUrlProvider();
 }

@@ -7,7 +7,9 @@ namespace SmeDemo.Api.Readiness;
 /// <summary>
 /// Proves the auth service still publishes usable OpenID metadata. The API
 /// validates tokens against that document, so auth being down is a readiness
-/// failure even though it is not a local store failure.
+/// failure even though it is not a local store failure. A JSON object is not
+/// enough: the document must name the issuer the API validates and an absolute
+/// <c>jwks_uri</c> the token handler can fetch.
 /// </summary>
 internal sealed class AuthMetadataReadinessProbe(HttpClient client, ApiOptions options) : IReadinessProbe
 {
@@ -29,9 +31,48 @@ internal sealed class AuthMetadataReadinessProbe(HttpClient client, ApiOptions o
         await using var content = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(content, cancellationToken: cancellationToken);
 
-        // A successful status with an HTML error page is still a broken
-        // metadata endpoint; require a JSON object (the discovery document).
-        return document.RootElement.ValueKind == JsonValueKind.Object;
+        return IsUsableMetadata(document.RootElement, options);
+    }
+
+    private static bool IsUsableMetadata(JsonElement root, ApiOptions options)
+    {
+        // A successful status with an HTML error page, a partial document, or a
+        // document for another issuer is still a broken metadata endpoint.
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!root.TryGetProperty("issuer", out var issuer)
+            || issuer.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(issuer.GetString()))
+        {
+            return false;
+        }
+
+        if (!string.Equals(
+                issuer.GetString()!.TrimEnd('/'),
+                options.JwtIssuer.TrimEnd('/'),
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (!root.TryGetProperty("jwks_uri", out var jwksUri)
+            || jwksUri.ValueKind != JsonValueKind.String
+            || !Uri.TryCreate(jwksUri.GetString(), UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+        {
+            return false;
+        }
+
+        // Metadata fetched over HTTPS must not point the key download at plain
+        // HTTP; JwtBearer would refuse it and every request would fail.
+        return !options.RequireHttpsMetadata || uri.Scheme == Uri.UriSchemeHttps;
     }
 
     private static bool IsJson(string? mediaType) =>

@@ -16,14 +16,9 @@ namespace SmeDemo.Application;
 /// </summary>
 public static class ServiceCollectionExtensions
 {
-    public static IServiceCollection AddApplication(
-        this IServiceCollection services,
-        ApplicationOptions options)
+    public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
-        ArgumentNullException.ThrowIfNull(options);
-
-        services.AddSingleton(options);
 
         services.AddValidatorsFromAssemblyContaining<GetTransactionsQueryValidator>();
 

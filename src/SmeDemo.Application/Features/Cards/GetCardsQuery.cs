@@ -9,12 +9,12 @@ public sealed record GetCardsQuery(Guid UserId) : IQuery<CardListResponse>;
 public sealed class GetCardsHandler : IQueryHandler<GetCardsQuery, CardListResponse>
 {
     private readonly ICardRepository _cards;
-    private readonly ApplicationOptions _options;
+    private readonly ICardArtUrlProvider _artUrls;
 
-    public GetCardsHandler(ICardRepository cards, ApplicationOptions options)
+    public GetCardsHandler(ICardRepository cards, ICardArtUrlProvider artUrls)
     {
         _cards = cards;
-        _options = options;
+        _artUrls = artUrls;
     }
 
     public async Task<CardListResponse> HandleAsync(
@@ -45,5 +45,5 @@ public sealed class GetCardsHandler : IQueryHandler<GetCardsQuery, CardListRespo
         card.Status,
         card.Currency,
         card.DisplayOrder,
-        $"{_options.PublicBaseUrl.TrimEnd('/')}/api/v1/cards/{card.Id}/art");
+        _artUrls.GetArtUrl(card.Id));
 }

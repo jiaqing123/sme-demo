@@ -28,7 +28,16 @@ public interface IReadinessService
     Task<ReadinessSnapshot> CheckAsync(CancellationToken cancellationToken);
 }
 
-public sealed class ReadinessService(IEnumerable<IReadinessProbe> probes) : IReadinessService
+/// <summary>
+/// Readiness is polled by Compose, orchestrator probes and people with curl, so
+/// every call must not fan out three downstream calls. A snapshot is cached for
+/// <see cref="CacheDuration"/> and refreshes are single-flight: concurrent
+/// probes share one in-flight check instead of stampeding SQL Server, Blob
+/// Storage and auth. The service is a singleton because the cache must outlive
+/// a request; probes are resolved from a fresh scope so a scoped probe (SQL
+/// connection, HTTP client) is still created and disposed correctly.
+/// </summary>
+public sealed class ReadinessService : IReadinessService
 {
     /// <summary>
     /// The probe budget. It is intentionally shorter than the Compose
@@ -37,15 +46,75 @@ public sealed class ReadinessService(IEnumerable<IReadinessProbe> probes) : IRea
     /// </summary>
     public static readonly TimeSpan OverallTimeout = TimeSpan.FromSeconds(5);
 
+    /// <summary>
+    /// How long a snapshot is reused. Short enough that a recovered dependency
+    /// shows up on the next probe interval, long enough that a chatty probe does
+    /// not multiply downstream load.
+    /// </summary>
+    public static readonly TimeSpan CacheDuration = TimeSpan.FromSeconds(2);
+
+    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly TimeProvider _clock;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    private ReadinessSnapshot? _snapshot;
+    private DateTimeOffset _snapshotAt;
+
+    public ReadinessService(IServiceScopeFactory scopeFactory, TimeProvider clock)
+    {
+        _scopeFactory = scopeFactory;
+        _clock = clock;
+    }
+
     public async Task<ReadinessSnapshot> CheckAsync(CancellationToken cancellationToken)
     {
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(OverallTimeout);
+        if (TryReadCache(out var cached))
+        {
+            return cached;
+        }
 
-        var checks = await Task.WhenAll(
-            probes.Select(probe => CheckAsync(probe, deadline.Token)));
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            // Another request may have refreshed the snapshot while this one
+            // waited for the gate.
+            if (TryReadCache(out cached))
+            {
+                return cached;
+            }
 
-        return new ReadinessSnapshot(checks);
+            using var scope = _scopeFactory.CreateScope();
+            var probes = scope.ServiceProvider.GetServices<IReadinessProbe>();
+
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(OverallTimeout);
+
+            var checks = await Task.WhenAll(
+                probes.Select(probe => CheckAsync(probe, deadline.Token)));
+
+            var snapshot = new ReadinessSnapshot(checks);
+            _snapshotAt = _clock.GetUtcNow();
+            Volatile.Write(ref _snapshot, snapshot);
+
+            return snapshot;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private bool TryReadCache(out ReadinessSnapshot snapshot)
+    {
+        var cached = Volatile.Read(ref _snapshot);
+        if (cached is not null && _clock.GetUtcNow() - _snapshotAt < CacheDuration)
+        {
+            snapshot = cached;
+            return true;
+        }
+
+        snapshot = null!;
+        return false;
     }
 
     private static async Task<ReadinessCheck> CheckAsync(

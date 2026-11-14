@@ -15,7 +15,7 @@ internal static class CardEndpoints
 
         // Artwork is behind a bearer token; keep shared caches from serving it.
         cards.MapGet("/{cardId:guid}/art", GetArt)
-            .WithName("GetCardArt")
+            .WithName(ApiRoutes.CardArt)
             .WithSummary("Stream a card's artwork.")
             .Produces(StatusCodes.Status200OK, contentType: "image/svg+xml")
             .ProducesProblem(StatusCodes.Status401Unauthorized)

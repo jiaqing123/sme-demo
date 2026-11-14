@@ -78,6 +78,12 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
     /// </summary>
     public ApiOptions Options => Services.GetRequiredService<ApiOptions>();
 
+    /// <summary>
+    /// The clock the readiness cache reads. Tests advance it to expire the
+    /// cached snapshot without sleeping.
+    /// </summary>
+    public ManualTimeProvider Clock { get; } = new(DateTimeOffset.UtcNow);
+
     public FakeCardRepository Cards { get; } = new();
 
     public FakeTransactionStore Transactions { get; } = new();
@@ -223,6 +229,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             services.RemoveAll<ITransactionStore>();
             services.RemoveAll<IBlobStore>();
             services.RemoveAll<IReadinessProbe>();
+            services.RemoveAll<TimeProvider>();
 
             services.AddSingleton<ICardRepository>(Cards);
             services.AddSingleton<ITransactionStore>(Transactions);
@@ -230,6 +237,7 @@ public sealed class ApiTestFactory : WebApplicationFactory<Program>
             services.AddSingleton<IReadinessProbe>(DatabaseProbe);
             services.AddSingleton<IReadinessProbe>(BlobStorageProbe);
             services.AddSingleton<IReadinessProbe>(AuthMetadataProbe);
+            services.AddSingleton<TimeProvider>(Clock);
 
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {
@@ -434,12 +442,21 @@ public sealed class FakeBlobStore : IBlobStore
 
 public sealed class FakeReadinessProbe(string name) : IReadinessProbe
 {
+    private int _calls;
+
     public string Name { get; } = name;
 
     /// <summary>Toggle the simulated dependency state for the next probe call.</summary>
     public bool Ready { get; set; } = true;
 
-    public Task<bool> CheckAsync(CancellationToken cancellationToken) => Task.FromResult(Ready);
+    /// <summary>How many times the probe actually ran, including cache misses.</summary>
+    public int Calls => Volatile.Read(ref _calls);
+
+    public Task<bool> CheckAsync(CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _calls);
+        return Task.FromResult(Ready);
+    }
 }
 
 /// <summary>

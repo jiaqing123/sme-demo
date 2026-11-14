@@ -4,10 +4,12 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using SmeDemo.Api.Auth;
+using SmeDemo.Api.Cards;
 using SmeDemo.Api.Configuration;
 using SmeDemo.Api.Endpoints;
 using SmeDemo.Api.Errors;
 using SmeDemo.Api.Http;
+using SmeDemo.Api.Observability;
 using SmeDemo.Api.OpenApi;
 using SmeDemo.Api.RateLimiting;
 using SmeDemo.Api.Readiness;
@@ -18,6 +20,15 @@ using SmeDemo.Infrastructure.Issuer;
 using SmeDemo.Infrastructure.Seeding;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.AddSmeDemoLogging();
+
+// Enforce an explicit request-body ceiling in every environment. The default
+// matches the nginx edge (1 MiB); TestServer does not apply Kestrel limits, so
+// the status-code matrix covers the 413 envelope while Kestrel owns the gate.
+builder.WebHost.ConfigureKestrel(kestrel =>
+    kestrel.Limits.MaxRequestBodySize = RequestBodyLimit.Resolve(
+        builder.Configuration["MAX_REQUEST_BODY_BYTES"]));
 
 // Development already validates the container at build time; apply the same
 // fail-fast checks in every environment so a Production-only dependency error
@@ -34,12 +45,25 @@ builder.Host.UseDefaultServiceProvider(provider =>
 // options for that run so the document is produced from endpoint metadata
 // alone; a deployed host never takes this path.
 var isBuildTimeOpenApi = Assembly.GetEntryAssembly()?.GetName().Name == "GetDocument.Insider";
+
+// The OpenAPI generator only needs endpoint metadata. Starting the
+// OpenTelemetry pipelines there would add an unused exporter and a background
+// processor to a build-time run, so skip telemetry for that path.
+if (!isBuildTimeOpenApi)
+{
+    builder.AddSmeDemoTelemetry(Telemetry.ServiceName);
+}
+
 var options = isBuildTimeOpenApi
     ? ApiOptions.ForOpenApiDocumentGeneration()
     : ApiOptions.FromConfiguration(builder.Configuration);
 
 builder.Services.AddSingleton(options);
-builder.Services.AddApplication(new ApplicationOptions(options.PublicBaseUrl));
+builder.Services.AddApplication();
+
+// The application layer asks for an artwork URL by card id; the API supplies
+// the route table and public base URL.
+builder.Services.AddSingleton<ICardArtUrlProvider, CardArtUrlProvider>();
 builder.Services.AddInfrastructure(new InfrastructureOptions(
     options.DatabaseUrl,
     options.StorageConnectionString,
@@ -61,9 +85,14 @@ builder.Services.AddHttpClient<AuthMetadataReadinessProbe>(client =>
     // up as a degraded check, not as a hung probe.
     client.Timeout = TimeSpan.FromSeconds(3);
 });
-builder.Services.AddScoped<IReadinessProbe>(provider =>
+builder.Services.AddSingleton<IReadinessProbe>(provider =>
     provider.GetRequiredService<AuthMetadataReadinessProbe>());
-builder.Services.AddScoped<IReadinessService, ReadinessService>();
+
+// Readiness snapshots are cached for a couple of seconds and refreshes are
+// single-flight, so probes by Compose and an orchestrator do not multiply the
+// downstream SQL/Blob/metadata calls.
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<IReadinessService, ReadinessService>();
 
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 builder.Services.AddProblemDetails();
@@ -142,7 +171,9 @@ builder.Services.AddRateLimiter(rateLimiter =>
 builder.Services.AddOpenApi(openApi =>
 {
     openApi.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
+    openApi.AddDocumentTransformer<ProblemDetailsContractTransformer>();
     openApi.AddOperationTransformer<EndpointSecurityTransformer>();
+    openApi.AddOperationTransformer<ProblemDetailsContractTransformer>();
 });
 
 if (options.SeedEnabled)
@@ -159,6 +190,10 @@ if (options.IssuerSyncEnabled)
 }
 
 var app = builder.Build();
+
+// First in the pipeline so every response, including the 401/404/413/429/500
+// envelopes written by later middleware, carries X-Request-Id.
+app.UseMiddleware<RequestIdMiddleware>();
 
 // Stop browsers and proxies from MIME-sniffing any API response. OnStarting
 // runs after the exception handler has reset a failed response, so 4xx/5xx

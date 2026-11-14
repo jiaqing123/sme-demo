@@ -61,6 +61,65 @@ public sealed class OpenApiContractTests
     }
 
     [TestMethod]
+    public async Task Document_DescribesTheFullProblemEnvelopeAndRetryAfter()
+    {
+        using var factory = new ApiTestFactory();
+        using var client = factory.CreateClient();
+
+        using var document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json"));
+        var root = document.RootElement;
+
+        var problem = root.GetProperty("components").GetProperty("schemas").GetProperty("ProblemDetails");
+        var required = problem.GetProperty("required").EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        CollectionAssert.Contains(required, "status");
+        CollectionAssert.Contains(required, "error");
+
+        var properties = problem.GetProperty("properties");
+        Assert.IsTrue(properties.TryGetProperty("traceId", out var traceId));
+        Assert.AreEqual("string", traceId.GetProperty("type").GetString());
+
+        var error = properties.GetProperty("error");
+        var errorProperties = error.GetProperty("properties");
+        Assert.IsTrue(errorProperties.TryGetProperty("code", out _));
+        Assert.IsTrue(errorProperties.TryGetProperty("message", out _));
+        Assert.IsTrue(errorProperties.TryGetProperty("errors", out var errors));
+        Assert.AreEqual(
+            "array",
+            errors.GetProperty("additionalProperties").GetProperty("type").GetString(),
+            "Validation errors must document a field-keyed array of messages.");
+        Assert.AreEqual(
+            "string",
+            errors.GetProperty("additionalProperties").GetProperty("items").GetProperty("type").GetString());
+
+        foreach (var route in new[] { "/api/v1/me", "/api/v1/cards/{cardId}/art" })
+        {
+            var responses = GetOperation(root, route).GetProperty("responses");
+            Assert.IsTrue(
+                responses.TryGetProperty("429", out var rateLimited),
+                $"{route} must document the 429 envelope.");
+            AssertRetryAfterContract(route, "429", rateLimited);
+
+            if (responses.TryGetProperty("503", out var unavailable))
+            {
+                AssertRetryAfterContract(route, "503", unavailable);
+            }
+        }
+    }
+
+    private static void AssertRetryAfterContract(string route, string status, JsonElement response)
+    {
+        Assert.IsTrue(
+            response.GetProperty("content").TryGetProperty("application/problem+json", out _),
+            $"{route} {status} must be documented as application/problem+json.");
+
+        var retryAfter = response.GetProperty("headers").GetProperty("Retry-After");
+        Assert.AreEqual("integer", retryAfter.GetProperty("schema").GetProperty("type").GetString());
+        Assert.AreEqual(1, retryAfter.GetProperty("schema").GetProperty("minimum").GetInt32());
+    }
+
+    [TestMethod]
     public async Task CommittedDocument_MatchesTheDocumentServedAtRuntime()
     {
         using var factory = new ApiTestFactory();

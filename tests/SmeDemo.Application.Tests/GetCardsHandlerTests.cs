@@ -1,4 +1,4 @@
-﻿using SmeDemo.Application.Features.Cards;
+using SmeDemo.Application.Features.Cards;
 
 namespace SmeDemo.Application.Tests;
 
@@ -15,7 +15,7 @@ public sealed class GetCardsHandlerTests
         repository.Cards.AddRange([third, first, second]);
         repository.Cards.Add(TestData.CreateCard(Guid.NewGuid(), TestData.OtherUserId, 0, "9999"));
 
-        var handler = new GetCardsHandler(repository, TestData.Options());
+        var handler = new GetCardsHandler(repository, TestData.ArtUrlProvider());
 
         var response = await handler.HandleAsync(new GetCardsQuery(TestData.UserId), CancellationToken.None);
 
