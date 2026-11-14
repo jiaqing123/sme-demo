@@ -1,7 +1,7 @@
 # Architecture Decision Record Index
 
 - **Status:** living index of accepted decisions
-- **Last updated:** 2026-11-13
+- **Last updated:** 2026-11-14
 
 This directory records decisions, not designs. Each row is an accepted decision,
 a one-line summary, and the document where the reasoning and the current rule are
@@ -36,6 +36,7 @@ engineer can find them without knowing the section numbers in advance.
 | ADR-015 | Accept the roughly 3 GB footprint dominated by SQL Server; do not promise the stack runs anywhere without measuring on the actual demo hardware. | Accepted | [`../requirements.md`](../../requirements.md) §5.6, §13.3 |
 | ADR-016 | Delivery is split: GitHub Actions stays the fast pull-request gate, and Azure Pipelines becomes the formal build and Test/UAT/Prod release path. Deployment stages ship as failing placeholders until the hosting model and Azure resources are chosen; images are built once and promoted by tag. | Accepted | [`../../azure-pipelines.md`](../../azure-pipelines.md); [`../../development.md`](../../development.md#continuous-integration); [`../../azure-pipelines.yml`](../../../azure-pipelines.yml) |
 | ADR-017 | Rate limiting and readiness are per-instance runtime controls with in-memory limiters; forwarded-header trust is explicit and Compose-only. A deployment must not assume shared budgets, and production must scope trusted proxies instead of trusting one hop. | Accepted | [`ADR-017`](ADR-017-per-instance-rate-limiting-and-readiness.md); [`../../requirements.md`](../../requirements.md) §11.2–§11.3; [`../../threat-model.md`](../../threat-model.md) §4, §7; [`../../development.md`](../../development.md#auth-rate-limits) ([API rate limits](../../development.md#api-rate-limits), [forwarded headers](../../development.md#forwarded-headers)) |
+| ADR-018 | Observability is opt-in OpenTelemetry with no default exporter and no collector; request ids are validated and logged; the SDK, base images, and scanner are pinned, every built image is scanned for fixable HIGH/CRITICAL issues with CycloneDX SBOMs, and the Compose runtime is read-only, capability-dropped, and resource-limited. | Accepted | [`ADR-018`](ADR-018-observability-and-supply-chain.md); [`../../observability.md`](../../observability.md); [`../../azure-pipelines.md`](../../azure-pipelines.md#container-image-hardening); [`../../development.md`](../../development.md#continuous-integration) |
 
 ## Revisiting a decision
 

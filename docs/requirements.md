@@ -853,7 +853,7 @@ Card expiry is the industry `MM/YY` form (`09/28`), not a full date.
 
 | Service | Image | Published | Healthcheck |
 |---------|-------|-----------|-------------|
-| `web` | multi-stage Node build → nginx | 8080 | `GET /` |
+| `web` | multi-stage Node build → `nginx:1.31-alpine` | 127.0.0.1:8080 | `GET /` |
 | `auth` | built from `src/SmeDemo.Auth` | 8081 | `GET /healthz` |
 | `api` | built from `src/SmeDemo.Api` | 8082 | `GET /readyz` |
 | `sms-mock` | built from `tools/SmsMock` | 8083 | `GET /healthz` |
@@ -890,6 +890,19 @@ document in parallel under a 5 second budget. It returns `200` with
 dependency outage marks the container unhealthy without restarting the process.
 The Compose smoke script waits for auth's `/healthz` and the API's `/readyz`
 before running the functional checks.
+
+Compose hardens its services: a read-only root filesystem,
+`cap_drop: [ALL]`, `no-new-privileges:true`, and a 64 MiB `tmpfs` at `/tmp`.
+Per-service CPU and memory limits apply across the stack (mssql 2 CPU / 2 GiB;
+azurite 1 / 512 MiB; api 1 / 512 MiB; auth 1 / 384 MiB; sms-mock and issuer-mock
+0.5 / 192 MiB; web 0.5 / 128 MiB; migrators and db-grants 1 / 256 MiB). SQL
+Server keeps `no-new-privileges` plus its limit only because its entrypoint must
+prepare the data volume; `db-grants` uses the same two controls. The migrators
+and `db-grants` remain one-shot. Visual Studio debugging relaxes only
+`read_only` and adds `SYS_PTRACE` in `docker-compose.vs.debug.yml`, which
+`docker compose up` does not read. The web image runs as the unprivileged
+`nginx` user on port 8080 and serves `/config.js` from `/tmp` with
+`Cache-Control: no-store`.
 
 ### 10.2 Compose profiles
 
@@ -928,12 +941,22 @@ If Cosmos is added later (§8.6), it arrives as an optional profile plus a secon
 | `AUTH_RATE_LIMIT_VERIFY_IP` / `AUTH_RATE_LIMIT_VERIFY_IP_WINDOW` | auth | `60` per `1m` |
 | `AUTH_RATE_LIMIT_RESEND_IP` / `AUTH_RATE_LIMIT_RESEND_IP_WINDOW` | auth | `10` per `1m` |
 | `API_RATE_LIMIT_PERMIT` / `API_RATE_LIMIT_WINDOW` | api | `120` per `1m`, per user and endpoint under `/api/v1` |
+| `MAX_REQUEST_BODY_BYTES` | auth, api | `1048576` (1 MiB), matching nginx's `client_max_body_size`; a non-positive or non-numeric value fails startup |
+| `LOG_FORMAT` | auth, api | unset keeps the simple console format; `json` selects one JSON object per line. Compose sets `json` for both |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | auth, api | unset; when set, exports traces and metrics to that OTLP endpoint |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | auth, api | unset; exports traces only, takes precedence over the generic endpoint for traces, and does not enable metrics |
+| `OTEL_CONSOLE_EXPORT` | auth, api | unset; `true` adds the console span/metric exporter. Intended for short local checks |
 
 Rate limits are fixed-window, in-memory, and per process: a restart resets every
 budget and replicas do not share one. Windows accept the same duration forms as
 the other intervals (`1m`, `30s`). `/healthz` and `/readyz` are never rate
 limited. A configured value that is not a positive integer or duration fails the
 container at start-up.
+
+The `/readyz` snapshot is cached for 2 seconds with a single-flight refresh, so
+Compose, an orchestrator, and a manual probe share one downstream check. The 5
+second budget and the `503` + `Retry-After: 5` contract are unchanged; a
+recovered dependency can take up to that window to appear ready.
 
 Secrets live in `.env` (git-ignored, with `.env.example` committed). No secret
 is baked into an image.
@@ -1043,7 +1066,22 @@ Rules:
   login budget, and a per-user/per-endpoint `/api/v1` budget. `429` and `503`
   carry a numeric `Retry-After`, including the challenge attempt lockout.
 - `GET /readyz` probes SQL Server, Blob Storage, and auth metadata in parallel
-  under a 5 second budget; `/healthz` stays liveness only.
+  under a 5 second budget; `/healthz` stays liveness only. The snapshot is
+  cached for 2 seconds with a single-flight refresh.
+- Both services emit OpenTelemetry traces and metrics (ASP.NET Core,
+  `HttpClient`, EF Core, runtime, and the Azure Blob/Table activity sources).
+  Exporters are opt-in; no collector is shipped. `LOG_FORMAT=json` gives one
+  JSON object per line, and every response carries a validated or generated
+  `X-Request-Id` that is also logged as `request_id`. See
+  [`observability.md`](observability.md).
+- Base images are pinned by tag and digest in the Dockerfiles and Compose, and
+  Dependabot proposes grouped weekly updates for NuGet, npm, GitHub Actions,
+  and Docker. The `images` CI job generates a CycloneDX SBOM per image and fails
+  on fixable `HIGH`/`CRITICAL` Trivy findings.
+- Compose runs the application services with a read-only root filesystem,
+  dropped capabilities, `no-new-privileges`, a 64 MiB `/tmp` tmpfs, and CPU and
+  memory limits. The web runtime is the unprivileged `nginx` user on port 8080.
+  The Visual Studio debug override is the only relaxed path.
 - A failed auth metadata/JWKS fetch is `503 UPSTREAM_UNAVAILABLE`, not
   `401 INVALID_TOKEN`.
 - Card artwork carries `Content-Security-Policy: default-src 'none'; sandbox`

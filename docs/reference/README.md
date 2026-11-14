@@ -100,7 +100,8 @@ Normative sources outside this directory:
 The baseline changes with the code. When a document here and the code disagree,
 the code and the normative documents above win; fix the reference document in the
 same pull request. The CI pipeline that proves the baseline is described in
-[`../development.md`](../development.md); the image-build and Compose smoke-test
-jobs run only in CI today. The Compose smoke has been exercised locally, but the
-image job's clean-checkout proof and GitHub Actions itself have not run yet; that
-caveat is recorded in the development guide.
+[`../development.md`](../development.md). GitHub Actions has run the earlier
+pipeline green (run #8 at `ee9554b`); the image-build and Compose smoke-test jobs
+are still CI-only in the sense that they are not part of the everyday local loop.
+The updated workflow for the observability/supply-chain change had not run on
+GitHub when this was written; check the latest run before quoting a status.

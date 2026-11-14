@@ -2,7 +2,7 @@
 
 - **Status:** required for every pull request
 - **Owner:** Architecture
-- **Last updated:** 2026-11-13
+- **Last updated:** 2026-11-14
 
 Run this list before opening a pull request and again before merging. A box that
 does not apply is ticked with a one-line reason in the pull request, not silently
@@ -136,14 +136,20 @@ the merge.
       [`../development.md`](../development.md#continuous-integration)).
 - [ ] The `images` and `compose-smoke` jobs are green. They are CI-only gates:
       the first builds six images (api, auth, web, sms-mock, issuer-mock,
-      migrator) tagged with the commit SHA; the second starts the minimal Compose
-      stack and runs `tools/smoke/compose-smoke.sh`, which waits for the API's
-      readiness probe and checks the unauthenticated `401 UNAUTHENTICATED` path.
+      migrator) tagged with the commit SHA, generates a CycloneDX SBOM per
+      image, and fails on any fixable `HIGH` or `CRITICAL` Trivy finding; the
+      second starts the minimal Compose stack and runs
+      `tools/smoke/compose-smoke.sh`, which waits for the API's readiness probe
+      and checks the unauthenticated `401 UNAUTHENTICATED` path.
+- [ ] Base images stay pinned by tag and digest in every Dockerfile and in
+      `docker-compose.yml`. Dependabot's weekly grouped updates move them; a
+      digest-only change is a rebuilt base image, not a mistake.
 - [ ] If the change cannot be exercised by the smoke test, say so in the pull
       request and describe the manual check performed.
 
-> **Verification status (2026-11-13):** the full Compose smoke flow passed
-> locally after the readiness switch, and two Release builds produced an identical
-> `openapi/v1.json` hash. GitHub Actions has not been executed yet; the Linux
-> `dotnet format` run and the stale-OpenAPI negative path are unverified in CI.
-> Tick the CI boxes only after a real GitHub run.
+> **Verification status (2026-11-14):** the full hardened Compose stack passed
+> the smoke checks locally, `X-Request-Id` and JSON logs were verified, the
+> read-only root filesystem was enforced, and all six images scanned clean under
+> the Trivy gate. GitHub Actions ran green for PR 2, run #8 at `ee9554b`; the
+> updated workflow has not yet run on GitHub for this change, and Azure
+> Pipelines has not been queued. Tick the CI boxes only after the relevant run.

@@ -20,10 +20,10 @@ trigger / PR
     │
     ▼
 Build
- ├─ DotNet            build, tests, format, OpenAPI, EF/SQL, package and secret gates
+ ├─ DotNet            build, tests, format, OpenAPI, EF/SQL, package and secret gates (SDK pinned to global.json)
  ├─ Web               npm ci, build, test
  ├─ ComposeValidation docker compose config -q
- ├─ Images            build six images; optionally push them to ACR
+ ├─ Images            build six images; generate SBOMs and scan them; optionally push to ACR
  └─ ComposeSmoke      start the minimal stack, wait, run the smoke script, tear down
     │
     ▼
@@ -78,6 +78,10 @@ The `DotNet` job runs on `ubuntu-latest` and performs:
 9. `python3 tools/smoke/check-vulnerabilities.py`
 10. a pinned, checksum-verified gitleaks working-tree scan
 
+The SDK is `dotnetVersion: 10.0.404`, kept in step with
+[`global.json`](../global.json); the GitHub workflow reads that file directly
+instead of repeating the version.
+
 The formatting gate matches the repository's existing style through
 [`.editorconfig`](../.editorconfig). It deliberately does not enforce a BOM
 choice: the repository contains both BOM and BOM-less UTF-8 files, and an
@@ -119,6 +123,32 @@ With `publishImages=true`, each image is pushed with two tags:
 The same commit-SHA tag is intended to be promoted through Test, UAT, and
 Production. Images must not be rebuilt per environment.
 
+With `publishImages=false` the job also scans what it built. It generates one
+CycloneDX SBOM per image, publishes them as the `sboms` pipeline artifact, and
+then runs the Trivy vulnerability gate on each image:
+
+- `--severity HIGH,CRITICAL` with `--ignore-unfixed` and `--exit-code 1`, so a
+  fixable high or critical finding fails the job;
+- a 15-minute per-image timeout;
+- each SBOM is generated before the gate, so a failed scan still leaves the
+  inventory behind.
+
+The scan steps are conditional on `publishImages=false` because `Docker@2`
+pushes without keeping local image tags on the agent; when images are pushed to
+ACR, the promoted digest should be scanned by the registry-side gate instead.
+Trivy is pinned and checksum-verified like gitleaks:
+
+| Variable | Value |
+|---|---|
+| `trivyVersion` | `0.76.2` |
+| `trivySha256` | `bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf` |
+| Linux x64 asset | `https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz` |
+
+All six images currently scan clean locally under the same Trivy version and
+flags. The repository uses Docker Official and Microsoft .NET 10 base images,
+pinned by tag and digest; see
+[Container image hardening](#container-image-hardening) for what is still open.
+
 ### Compose smoke test
 
 The `ComposeSmoke` job:
@@ -153,6 +183,15 @@ than `jq` or brittle `grep`/`sed`.
 A cold stack can take several minutes to start, mostly because SQL Server and
 Azurite warm up and the migrators run before auth and api. The job timeout is
 45 minutes.
+
+### Dependency updates
+
+Dependabot is not a pipeline job. [`.github/dependabot.yml`](../.github/dependabot.yml)
+runs weekly on Monday and opens grouped pull requests for NuGet, npm under
+`/web`, `github-actions`, and Docker in the root Compose file plus every
+Dockerfile directory. Those pull requests then run through the same Build gates;
+the digest-pinned base images move by Dependabot pull request rather than by a
+manual edit.
 
 ## Deployment stages
 
@@ -290,7 +329,7 @@ timings with warm base images:
 
 - format verification: 36 s
 - Release build: 8 s incremental, 22 s first run
-- Release tests: 29 s, 143 tests
+- Release tests: 29 s
 - all six image builds: 7 min 19 s
 - `docker compose up` to a healthy stack: 4 min 39 s
 - smoke script: 5.5 s
@@ -318,6 +357,22 @@ packages are not cached.
   verified against a SHA-256 checksum. `.gitleaks.toml` allowlists the
   documented Azurite emulator key and generated build output; it does not
   disable the default rule set.
+- **Images** are scanned with Trivy 0.76.2 when they are built locally
+  (`publishImages=false`), also pinned and checksum-verified. Fixable `HIGH` and
+  `CRITICAL` findings fail the build; unfixed findings are logged but do not
+  block. A CycloneDX SBOM is generated for every image and published as the
+  `sboms` artifact before the gate runs. When images are pushed to ACR, these
+  local scan steps do not run; the promoted digest still needs a registry-side
+  scan.
+- **Supply chain pinning** has two layers. The .NET SDK is pinned in
+  `global.json` (`10.0.404`, `latestFeature`, no prereleases) for the GitHub
+  workflow and repeated as `dotnetVersion` here; every base image is pinned by
+  tag and digest in the Dockerfiles and `docker-compose.yml`.
+- **Dependency updates** are proposed weekly by
+  [`.github/dependabot.yml`](../.github/dependabot.yml), grouped per ecosystem
+  for NuGet, npm under `/web`, `github-actions`, and Docker in the root Compose
+  file plus every Dockerfile directory. Dependabot moves the tag and digest
+  together; a digest-only change is how a rebuilt base image arrives.
 - **No runtime dependency changes** were introduced for CI. The tooling is
   repository-local scripts plus Azure Pipelines tasks.
 
@@ -357,14 +412,23 @@ provenance rather than the tag name.
 ### Current position
 
 This demo currently uses Docker Official Images and Microsoft-published .NET
-images:
+images, all pinned by tag and digest:
 
 | Image | Runtime base | Hardening notes |
 |---|---|---|
-| api, auth, sms-mock, issuer-mock | `mcr.microsoft.com/dotnet/aspnet:10.0` | runs as non-root via `USER $APP_UID`; installs `curl` for the Compose healthcheck |
-| migrator | `mcr.microsoft.com/dotnet/runtime:10.0` | no healthcheck; one-shot process |
-| web | `nginx:1.27-alpine` | nginx master runs as root by default; uses `wget` in the healthcheck |
+| api, auth, sms-mock, issuer-mock | `mcr.microsoft.com/dotnet/aspnet:10.0` | runs as non-root via `USER $APP_UID`; installs `curl` for the Compose healthcheck; Compose adds a read-only root, dropped capabilities, `no-new-privileges`, a 64 MiB `/tmp`, and limits |
+| migrator | `mcr.microsoft.com/dotnet/runtime:10.0` | no healthcheck; one-shot process; same Compose hardening and limits |
+| web | `nginx:1.31-alpine` | runs as the unprivileged `nginx` user on port 8080; `nginx-module-xslt` and `libxslt` are removed; uses `wget` in the healthcheck; same hardening and limits |
+| mssql, db-grants | `mcr.microsoft.com/mssql/server:2022-latest` | digest-pinned; mssql keeps `no-new-privileges` and CPU/memory limits only because its entrypoint must prepare the data volume; db-grants keeps the same two controls |
+| azurite | `mcr.microsoft.com/azure-storage/azurite` | digest-pinned; same Compose hardening and limits as the application services |
 | build stages only | `mcr.microsoft.com/dotnet/sdk:10.0`, `node:22-bookworm-slim` | not part of the runtime attack surface |
+
+In the CLI Compose stack the runtime services run with a read-only root
+filesystem, `cap_drop: [ALL]`, `no-new-privileges:true`, and a 64 MiB `tmpfs` at
+`/tmp`; the migrators and `db-grants` keep their one-shot behaviour. SQL Server
+and `db-grants` are the documented exception to the read-only/capability drop.
+`docker-compose.vs.debug.yml` relaxes `read_only` and adds `SYS_PTRACE` for the
+Visual Studio debugger only, and `docker compose up` never reads that file.
 
 DHI is **not required for the demo** and is not a drop-in replacement for the
 current Dockerfiles:
@@ -373,8 +437,8 @@ current Dockerfiles:
   and use `CMD-SHELL curl` healthchecks. DHI runtime variants have no package
   manager or shell, so both would need to change.
 - The web image's entrypoint script and healthcheck assume a shell and `wget`;
-  the DHI nginx variant must be verified against the nginx configuration and
-  runtime-config script.
+  any replacement must preserve the unprivileged `nginx` user, port 8080, and
+  the `/tmp/config.js` path.
 - The migrator has no healthcheck, but its base image and certificate/runtime
   dependencies still need validation against the target SQL Server.
 - The .NET DHI examples use different tags and image layouts; a migration must
@@ -382,22 +446,32 @@ current Dockerfiles:
 
 ### Recommendation
 
-For an Azure production landing, add a separate **container hardening** work
-item rather than folding it into the current CI change. The target state should
-include:
+For an Azure production landing, keep a separate **container hardening** work
+item. The current CI change closes the runtime and supply-chain items that do
+not need a base-image migration, but it does not replace DHI or remove the
+shell from the images:
 
-1. Choose a hardened runtime base per service: DHI Community, Microsoft
-   chiseled images, or an internally approved distroless base.
-2. Keep multi-stage builds; only the runtime stage ships.
-3. Remove shell/`curl` from the runtime image. Move health checks to an
-   external probe or a supported health-check binary, and update Compose and
-   the deployment probes together.
-4. Run as non-root, with a read-only root filesystem, no-new-privileges, and
-   dropped Linux capabilities where the hosting platform allows it.
-5. Pin base images by digest, scan the built images (Microsoft Defender for
-   Cloud, Trivy, or the ACR scanner), and publish SBOM/provenance.
-6. Re-run the Compose smoke test and the environment smoke tests after the base
-   image change; health-check behaviour is the most likely regression.
+1. **Open — hardened base images.** Choose a hardened runtime base per service:
+   DHI Community, Microsoft chiseled images, or an internally approved
+   distroless base.
+2. **Done — multi-stage builds.** Only the runtime stage ships; the SDK and Node
+   stages stay out of the final image.
+3. **Open — remove shell/`curl` from the runtime image.** Move health checks to
+   an external probe or a supported health-check binary, and update Compose and
+   the deployment probes together. External probes are not implemented.
+4. **Done in Compose, open in the images and the platform.** The .NET services
+   and nginx run as non-root, and the CLI stack uses a read-only root filesystem,
+   `no-new-privileges`, and dropped capabilities, but the runtime images still
+   ship a shell (and the API, auth, and mock images also ship `curl`), and a
+   deployment must reproduce the same security context in its pod or container
+   definition.
+5. **Done — digest pinning, image scanning, and SBOMs.** Base images are pinned
+   by tag and digest, Dependabot updates them weekly, and CI scans the built
+   images and publishes CycloneDX SBOMs. Provenance/SLSA attestation remains
+   open.
+6. **Ongoing — re-run the Compose smoke test and the environment smoke tests
+   after every base-image change;** health-check behaviour is the most likely
+   regression.
 
 Do not add a decorative "harden" tag or label. Hardening is a property of the
 image contents and runtime configuration, not of its name.

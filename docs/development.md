@@ -619,13 +619,14 @@ docker compose up -d --build web
 ```
 
 The Dockerfile is multi-stage: `node:22-bookworm-slim` runs `npm ci` and the
-build, then the static output is copied into `nginx:1.27-alpine`. npm packages
-are fetched during `docker compose build` only; the runtime image makes no
-outbound requests.
+build, then the static output is copied into `nginx:1.31-alpine`, which runs as
+the unprivileged `nginx` user on port 8080. npm packages are fetched during
+`docker compose build` only; the runtime image makes no outbound requests.
 
 `/config.js` is generated when the container starts by
 `web/nginx/40-runtime-config.sh` from `DEMO_MODE`, `DEMO_USERNAME`,
-`DEMO_PASSWORD`, and `DEMO_OTP`. `DEMO_MODE` must be exactly `true` for the file
+`DEMO_PASSWORD`, and `DEMO_OTP`. It is written to the `/tmp` tmpfs because the
+root filesystem is read-only. `DEMO_MODE` must be exactly `true` for the file
 to contain credentials. To change the demo hint:
 
 ```powershell
@@ -671,11 +672,14 @@ on demand. It has five jobs:
 
 | Job | Runner / timeout | What it does |
 |-----|------------------|--------------|
-| `dotnet` | ubuntu, 20 min | checkout; set up .NET `10.0.x`; `dotnet tool restore`; `dotnet build SmeDemo.slnx --configuration Release`; `dotnet test SmeDemo.slnx --configuration Release --no-build`; `dotnet format SmeDemo.slnx --verify-no-changes`; verify `openapi/v1.json` exists and `git diff --exit-code -- openapi/` (the Release build regenerates it); pending-model checks for the API and auth DbContexts; generated-SQL diff for both; removed-package guard (MediatR/AutoMapper); `python3 tools/smoke/check-vulnerabilities.py`; gitleaks secret scan. |
+| `dotnet` | ubuntu, 20 min | checkout; set up .NET from `global.json` (`10.0.404`, `latestFeature`); `dotnet tool restore`; `dotnet build SmeDemo.slnx --configuration Release`; `dotnet test SmeDemo.slnx --configuration Release --no-build`; `dotnet format SmeDemo.slnx --verify-no-changes`; verify `openapi/v1.json` exists and `git diff --exit-code -- openapi/` (the Release build regenerates it); pending-model checks for the API and auth DbContexts; generated-SQL diff for both; removed-package guard (MediatR/AutoMapper); `python3 tools/smoke/check-vulnerabilities.py`; gitleaks secret scan. |
 | `web` | ubuntu, 15 min | Node 22, `npm ci`, `npm run build`, `npm test`. |
 | `compose` | ubuntu, 5 min | copy `.env.example` to `.env`, then `docker compose config -q`. |
-| `images` | ubuntu, 40 min | build six images from the repository root: api, auth, web, sms-mock, issuer-mock, and migrator, each tagged with `${GITHUB_SHA}`; fail on any build error. |
+| `images` | ubuntu, 50 min | build six images from the repository root: api, auth, web, sms-mock, issuer-mock, and migrator, each tagged with `${GITHUB_SHA}`; generate one CycloneDX SBOM per image into `$RUNNER_TEMP/sbom` and upload them as artifact `sboms`; scan each image with Trivy 0.76.2 for fixable HIGH/CRITICAL vulnerabilities (`--severity HIGH,CRITICAL --ignore-unfixed --timeout 15m --exit-code 1`); fail on any build or scan error. |
 | `compose-smoke` | ubuntu, 45 min | start the minimal stack, wait for the one-shot containers and health, run `tools/smoke/compose-smoke.sh`, dump diagnostics on failure, and always tear down with volumes. |
+
+Both scanner downloads — gitleaks and Trivy — are pinned to an exact version and
+verified by SHA-256 before the binary runs.
 
 The `dotnet`, `web`, and `compose` jobs need no SQL Server, Azurite, or SMS
 container: the API tests replace the repositories and storage with fakes, the
@@ -756,6 +760,40 @@ history. `.gitleaks.toml` extends the default rule set and allowlists only the
 Azurite emulator's documented well-known key plus local build/tool caches
 (`.vs/`, `.tmp-tools/`, `bin/`, `obj/`, `node_modules/`).
 
+**Container images.** The NuGet scan covers the application dependency graph;
+the `images` job scans the artefact that is actually promoted. After building
+the six images it generates one CycloneDX SBOM per image
+(`trivy image --format cyclonedx`) and uploads them as the `sboms` artifact
+before the vulnerability gate, so a failing scan still leaves the inventory
+behind. It then scans the same images and fails on every fixable `HIGH` or
+`CRITICAL` finding:
+
+```bash
+trivy image --scanners vuln --timeout 15m \
+  --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 <image>
+```
+
+Unfixed findings are reported in the log but do not fail the job: no rebuild can
+remove them, so they belong in the risk register rather than a red pipeline. On
+2026-11-14 all six images scanned clean locally. Like gitleaks, Trivy is
+downloaded from a pinned release and checksum-verified:
+
+| Variable | Value |
+|----------|-------|
+| `TRIVY_VERSION` | `0.76.2` |
+| `TRIVY_SHA256` | `bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf` |
+| Linux x64 asset | `https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz` |
+
+**Dependency updates.** [`.github/dependabot.yml`](../.github/dependabot.yml)
+runs weekly on Monday and groups updates so a patch wave produces one pull
+request per ecosystem rather than one per package. It covers NuGet (central
+package management), npm under `/web`, `github-actions`, and Docker for the root
+Compose file plus every Dockerfile directory (`/src/SmeDemo.Api`,
+`/src/SmeDemo.Auth`, `/web`, `/tools/IssuerMock`, `/tools/SmsMock`, and
+`/tools/Migrator`). Every base image is pinned by tag and digest in the
+Dockerfiles and `docker-compose.yml`; Dependabot moves the tag and digest
+together, and a digest-only change is how a rebuilt base image arrives.
+
 ### Compose smoke test
 
 The `compose-smoke` job prepares `.env` and starts the minimal set with `--build`:
@@ -783,6 +821,47 @@ check:
 On failure the job dumps `docker compose ps -a` and
 `docker compose logs --no-color`. The teardown step runs unconditionally:
 `docker compose down -v --remove-orphans`.
+
+### Container runtime hardening
+
+`docker-compose.yml` applies a shared hardening anchor to the runtime services
+(`api`, `auth`, `web`, `sms-mock`, `issuer-mock`, the migrator containers, and
+`azurite`): a read-only root filesystem, `no-new-privileges:true`,
+`cap_drop: [ALL]`, and a 64 MiB `tmpfs` at `/tmp`.
+SQL Server keeps `no-new-privileges` plus its resource limit because its
+entrypoint must prepare the data volume; `db-grants` uses the same two controls.
+Every service also declares CPU and memory limits (for example `api` 1 CPU /
+512 MiB, `web` 0.5 CPU / 128 MiB, `mssql` 2 CPU / 2 GiB). The one-shot services
+keep their `restart: "no"` behaviour.
+
+The web runtime is `nginx:1.31-alpine` (digest-pinned), runs as the unprivileged
+`nginx` user on port 8080, and publishes only `127.0.0.1:8080:8080`. The build
+removes `nginx-module-xslt` and `libxslt` because the configuration never loads
+XSLT. `/config.js` is generated into `/tmp` and served with
+`Cache-Control: no-store`. A read-only root filesystem means a process that
+tries to write outside `/tmp` or a mounted volume fails; use
+`docker compose exec <service> sh -c 'echo ok > /tmp/probe'` to prove `/tmp` is
+writable and `touch /nope` to prove the root is not. Visual Studio debugging
+relaxes this in `docker-compose.vs.debug.yml` (`read_only: false` plus
+`SYS_PTRACE`), which `docker compose up` never reads, so the CLI stack stays
+hardened. For failure triage, see the write-failure rows in
+[Troubleshooting](#troubleshooting); the operational procedures are in
+[`runbook.md`](runbook.md), and the rationale is in
+[ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md).
+
+### Observability
+
+Both services register OpenTelemetry instrumentation for ASP.NET Core requests,
+outgoing `HttpClient` calls, EF Core, runtime metrics, and the Azure Blob/Table
+activity sources. Exporters are opt-in: with no endpoint configured the signals
+are collected and dropped, and Compose ships no collector. `LOG_FORMAT=json`
+switches the console logger to one JSON object per line; Compose sets it for
+`api` and `auth`, while a local `dotnet run` keeps the human-readable format.
+Every response carries `X-Request-Id`: a valid inbound value (1–64 characters
+from `[A-Za-z0-9._:-]`) is echoed, otherwise the trace id is used. The same value
+is logged as `request_id`, which is how a failing response is tied back to the
+JSON log line and its trace. The full signal list, resource attributes, and the
+local collector recipe are in [`observability.md`](observability.md).
 
 ### What you can verify locally
 
@@ -824,6 +903,36 @@ Copy-Item .env.example .env -Force   # only in a scratch checkout
 docker compose config -q
 ```
 
+With the full stack running (`docker compose up -d --build`), these runtime
+checks exercise the hardening and the observability contracts:
+
+```powershell
+# Read-only root filesystem: /tmp is writable, anything else is not.
+docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' (docker compose ps -q api)
+docker compose exec -T api sh -c 'touch /nope'          # expected to fail
+docker compose exec -T api sh -c 'echo ok > /tmp/probe' # expected to succeed
+
+# A valid X-Request-Id is echoed back; an invalid one is replaced by the trace id.
+$response = Invoke-WebRequest http://localhost:8082/healthz `
+  -Headers @{ 'X-Request-Id' = 'demo-check-1' }
+$response.Headers['X-Request-Id']                       # demo-check-1
+
+# /config.js must never be cached.
+$config = Invoke-WebRequest http://localhost:8080/config.js
+$config.Headers['Cache-Control']                        # no-store
+
+# Compose sets LOG_FORMAT=json for api and auth.
+docker compose logs --no-log-prefix --tail 1 api | ConvertFrom-Json
+docker compose logs --no-log-prefix api |
+  Select-String 'request_id' | Select-Object -Last 1 |
+  ForEach-Object { $_.Line | ConvertFrom-Json } |
+  Select-Object request_id, TraceId, SpanId
+```
+
+The SBOM generation and Trivy image scan do not run locally in this list; they
+are part of the CI `images` job, which scans the Linux-built images. All six
+images scanned clean under the same gate on 2026-11-14.
+
 The removed-package guard is the CI equivalent of:
 
 ```powershell
@@ -844,10 +953,13 @@ your operating system locally.
 
 ### What runs only in CI today
 
-- **`images`** builds and tags all six application images with `${GITHUB_SHA}`.
-  `docker compose build` locally proves the Dockerfiles on your machine, but it is
-  not the same gate: the CI job builds every image, on Linux, from a clean
-  checkout, with the repository root as the build context.
+- **`images`** builds and tags all six application images with `${GITHUB_SHA}`,
+  generates a CycloneDX SBOM per image, uploads them as the `sboms` artifact,
+  and scans every image for fixable HIGH/CRITICAL vulnerabilities with the
+  pinned Trivy release. `docker compose build` locally proves the Dockerfiles on
+  your machine, but it is not the same gate: the CI job builds every image, on
+  Linux, from a clean checkout, with the repository root as the build context,
+  and it scans what was actually built.
 - **`compose-smoke`** starts the minimal real stack, waits for the API's
   readiness check, performs the auth login and OTP flow, and calls the API
   through the token. Reproduce it with the minimal `docker compose up -d
@@ -855,16 +967,19 @@ your operating system locally.
   `docker compose down -v --remove-orphans`; the CI job remains the required
   Linux proof.
 
-### Verification status (2026-11-13)
+### Verification status (2026-11-14)
 
-- The full Compose smoke flow was run locally against the real stack on
-  2026-11-13 after the readiness switch: auth `/healthz`, API `/readyz`, login,
-  verify, the authenticated API call, and the anonymous 401 all passed.
-- A second Release build produced an identical `openapi/v1.json` SHA-256, so the
-  build-time generation is deterministic.
-- GitHub Actions itself has not been executed. The Linux `dotnet format` run and
-  the stale-OpenAPI negative path remain unverified in CI; do not describe the
-  pipeline as green until it has run on GitHub.
+- The full hardened Compose stack, including `web`, started locally on
+  2026-11-14; the Compose smoke checks passed and auth login plus API calls work
+  through nginx on `http://localhost:8080`.
+- `X-Request-Id` echo and the JSON console logs were verified on `api` and
+  `auth`; `/config.js` returned `Cache-Control: no-store`; the read-only root
+  filesystem was enforced (`touch /nope` fails, `/tmp` stays writable); and all
+  six images scanned clean under the Trivy gate.
+- GitHub Actions ran green for PR 2, run #8 at `ee9554b`. The updated workflow
+  described above (SDK from `global.json`, SBOM/Trivy image gate, hardened
+  images) has not yet run on GitHub for this change, and Azure Pipelines has not
+  been queued.
 
 ## Everyday commands
 
@@ -872,6 +987,18 @@ your operating system locally.
 dotnet tool restore                       # after cloning; installs dotnet-ef
 dotnet build SmeDemo.slnx
 dotnet test SmeDemo.slnx                  # migrator, auth, application, infrastructure, issuer-mock, API tests
+```
+
+With the stack running, check request correlation and JSON logging:
+
+```powershell
+# The header is echoed when valid, otherwise replaced by the trace id.
+$health = Invoke-WebRequest http://localhost:8082/healthz `
+  -Headers @{ 'X-Request-Id' = 'everyday-check-1' }
+$health.Headers['X-Request-Id']           # everyday-check-1
+
+# Compose sets LOG_FORMAT=json for api and auth.
+docker compose logs --no-log-prefix --tail 1 api | ConvertFrom-Json
 ```
 
 ## Changing a schema
@@ -977,6 +1104,10 @@ reset. Do not use it on a database you care about.
 | `web` is up but the page is blank | the built assets are missing or the module failed to load | check the browser console and `docker compose logs web`; rebuild with `docker compose up -d --build web` |
 | `http://localhost:8080/auth/...` or `/api/...` returns 502 | nginx cannot resolve or reach `auth`/`api` | `docker compose ps auth api`; wait for both to be healthy, then `docker compose restart web` |
 | Demo hint is stale or missing | `/config.js` was cached, or the container was not recreated after changing `.env` | reload with dev tools open, then `docker compose up -d --force-recreate web` |
+| `web` is healthy but `/config.js` returns 404 | the `/tmp` tmpfs is missing, or the entrypoint did not run `40-runtime-config.sh` | `docker compose exec web sh -c 'ls -l /tmp/config.js'` and `docker compose logs web`; recreate web (`docker compose up -d --force-recreate web`) and confirm the Compose `tmpfs: /tmp` entry is present |
+| A request larger than 1 MiB returns `413` through the real port but not in `WebApplicationFactory` tests | TestServer does not enforce Kestrel limits; the real host enforces `MAX_REQUEST_BODY_BYTES` (default 1 MiB) and nginx enforces `client_max_body_size 1m` | reproduce against the container, not the test host; raise `MAX_REQUEST_BODY_BYTES` and the nginx limit together if a larger body is legitimate |
+| A service fails to write a file that used to work | the root filesystem is read-only; only `/tmp` and mounted volumes are writable | write scratch data under `/tmp` (or add a volume deliberately); confirm with `docker inspect --format '{{.HostConfig.ReadonlyRootfs}}'`; the Visual Studio debug override is the only relaxed path |
+| nginx logs `can not modify /etc/nginx/conf.d/default.conf` | the config files are root-owned and the runtime is read-only and unprivileged; the stock image entrypoint tries to rewrite them | expected and harmless: the committed configuration is already correct, and the line does not stop nginx from starting |
 | `docker compose build web` fails on `npm ci` | no network during the image build | connect to the registry, or run `cd web; npm ci` locally first to warm the npm cache |
 
 ## What is not here yet

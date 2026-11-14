@@ -56,9 +56,11 @@ today:
 - CI in `.github/workflows/ci.yml`: on every push to `main` and every pull
   request it builds and tests .NET (Release) and the web app, checks formatting,
   pending migrations, and generated SQL, regenerates the OpenAPI document, scans
-  dependencies and secrets, builds images tagged by commit SHA, and runs a
-  Compose smoke test that waits for the API's `/readyz`, logs in through `auth`,
-  and calls `GET /api/v1/me`.
+  dependencies and secrets, builds images tagged by commit SHA from
+  digest-pinned base images, generates a CycloneDX SBOM per image, scans those
+  images for fixable HIGH/CRITICAL vulnerabilities, and runs a Compose smoke
+  test that waits for the API's `/readyz`, logs in through `auth`, and calls
+  `GET /api/v1/me`.
 
 Not implemented yet: a real deployment and a real identity provider
 (requirements §3 and §10.6; the demo runs locally from Compose).
@@ -70,7 +72,11 @@ The conventions a new service should copy live in
 [Definition of Done](docs/reference/definition-of-done.md), the
 [ADR index](docs/reference/adr/README.md), the
 [add-a-resource cookbook](docs/reference/cookbook-add-resource.md), and the
-[versioning rule](docs/reference/versioning.md).
+[versioning rule](docs/reference/versioning.md). Runtime telemetry, JSON logging,
+and `X-Request-Id` correlation are described in
+[`docs/observability.md`](docs/observability.md); incident, key-rotation,
+rollback, and restore procedures are in
+[`docs/runbook.md`](docs/runbook.md).
 
 The API contract is committed as [`openapi/v1.json`](openapi/v1.json). It is
 generated during `dotnet build`, not hand-edited; see
@@ -141,6 +147,8 @@ TypeScript check and the production build. See
 docs/requirements.md                System requirements and architecture
 docs/development.md                 How to build, migrate, run auth, and reset
 docs/azure-pipelines.md             Azure Pipelines gates and Test/UAT/Prod promotion
+docs/observability.md               Telemetry, JSON logs, and X-Request-Id correlation
+docs/runbook.md                     Incident, rotation, rollback, and restore procedures
 docs/reference/                     baseline rules, Definition of Done, ADR index, cookbook, versioning
 docs/native-di-dispatch.md          Team standard for command/query handlers
 docs/licensing.md                   Third-party licensing notes for management review
