@@ -71,6 +71,13 @@ Because Compose's `api` healthcheck calls `/readyz` while `auth` uses `/healthz`
   though the process is alive and `/healthz` still returns `200`;
 - `auth` shows `unhealthy` only when the auth process itself stops answering.
 
+The check runs as the in-image `SmeDemo.HealthProbe` via `dotnet`, because the
+.NET runtime images have no shell or `curl`. Inspect the recorded result, exit
+code, and probe stderr with
+`docker inspect --format '{{json .State.Health}}' <container>`. The probe's
+output is in the health log, not in `docker compose logs`, which shows only the
+application's own logging.
+
 ### Inspect health
 
 ```powershell

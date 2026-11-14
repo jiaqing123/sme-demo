@@ -86,7 +86,7 @@ logged; nothing is trusted because it is "internal".
 | S10 | Elevation of privilege | Default-deny `FallbackPolicy`; named `ApiUser` policy; org requirement | Policy/authorisation matrix tests; separate ops/admin plane | Tests: anonymous, wrong org, wrong role |
 | S11 | SSRF / unsafe outbound call | Issuer URL comes from configuration, not user input | Egress allowlist, no user-controlled URLs, timeouts/circuit breaker | Review + tests for config-only URLs |
 | S12 | Supply-chain compromise | Central package versions; CI MediatR/AutoMapper guard | Pinned image digests, SBOM, dependency/image scanning, Dependabot, SHA-tagged images | CI fails on vulnerable/unpinned dependency |
-| S13 | Container escape / host compromise | Non-root container user | `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, seccomp, resource limits | Compose/security scan; runtime inspection |
+| S13 | Container escape / host compromise | Non-root container user; the .NET runtime images have no shell or package manager | `read_only`, `cap_drop: [ALL]`, `no-new-privileges`, seccomp, resource limits | Compose/security scan; runtime inspection |
 | S14 | OTP brute force / SMS abuse | 3 wrong OTPs destroys the challenge; 60s resend cooldown; per-IP verify/resend budgets; per-account login budget | Per-IP/per-account limits, alerting, provider spend caps | Abuse-case tests; alert on spike |
 
 ## 5. Abuse cases that must become tests

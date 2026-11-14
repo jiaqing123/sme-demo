@@ -61,6 +61,10 @@ today:
   images for fixable HIGH/CRITICAL vulnerabilities, and runs a Compose smoke
   test that waits for the API's `/readyz`, logs in through `auth`, and calls
   `GET /api/v1/me`.
+- Runtime images: the .NET services and migrator use Microsoft chiseled bases
+  with no shell, package manager, or `curl`; Compose healthchecks use a small
+  in-image .NET probe. `web` (nginx) is the documented exception and still has a
+  shell.
 
 Not implemented yet: a real deployment and a real identity provider
 (requirements §3 and §10.6; the demo runs locally from Compose).

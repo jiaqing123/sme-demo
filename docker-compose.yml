@@ -9,8 +9,9 @@ name: sme-demo
 
 # Shared runtime hardening for the .NET services and the unprivileged nginx.
 # The root filesystem is immutable; /tmp is the only writable scratch space
-# (ASP.NET Core, curl healthchecks and nginx pid/cache files use it). The auth
-# signing keys are the one exception: they live on the auth-keys volume.
+# (ASP.NET Core and nginx pid/cache files use it; the .NET health probe does not
+# write). The auth signing keys are the one exception: they live on the
+# auth-keys volume.
 x-hardened: &hardened
   read_only: true
   security_opt:
@@ -222,9 +223,9 @@ services:
         # from starting; login then returns a readable 503 (acceptance 17).
         condition: service_started
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "curl -fsS http://localhost:8081/healthz || exit 1"
+      # The images are chiseled: no shell and no curl. The probe is a small .NET
+      # executable copied into the image at /healthprobe.
+      test: ["CMD", "dotnet", "/healthprobe/SmeDemo.HealthProbe.dll", "http://localhost:8081/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -251,9 +252,7 @@ services:
     ports:
       - "127.0.0.1:8083:8083"
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "curl -fsS http://localhost:8083/healthz || exit 1"
+      test: ["CMD", "dotnet", "/healthprobe/SmeDemo.HealthProbe.dll", "http://localhost:8083/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -280,9 +279,7 @@ services:
     ports:
       - "127.0.0.1:8084:8084"
     healthcheck:
-      test:
-        - "CMD-SHELL"
-        - "curl -fsS http://localhost:8084/healthz || exit 1"
+      test: ["CMD", "dotnet", "/healthprobe/SmeDemo.HealthProbe.dll", "http://localhost:8084/healthz"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -348,9 +345,7 @@ services:
       # Readiness, not liveness: mssql, azurite and auth are healthy before this
       # service starts, so a 200 here means the API can actually serve traffic.
       # The probe itself answers within 5s; allow headroom for a slow first run.
-      test:
-        - "CMD-SHELL"
-        - "curl -fsS http://localhost:8082/readyz || exit 1"
+      test: ["CMD", "dotnet", "/healthprobe/SmeDemo.HealthProbe.dll", "http://localhost:8082/readyz"]
       interval: 10s
       timeout: 10s
       retries: 18

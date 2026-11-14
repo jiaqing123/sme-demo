@@ -17,6 +17,9 @@
     <Project Path="tests/SmeDemo.Infrastructure.Tests/SmeDemo.Infrastructure.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/" />
+  <Folder Name="/tools/HealthProbe/">
+    <Project Path="tools/HealthProbe/SmeDemo.HealthProbe.csproj" />
+  </Folder>
   <Folder Name="/tools/IssuerMock/">
     <Project Path="tools/IssuerMock/SmeDemo.IssuerMock.csproj" />
   </Folder>

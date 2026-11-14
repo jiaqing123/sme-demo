@@ -418,9 +418,9 @@ images, all pinned by tag and digest:
 
 | Image | Runtime base | Hardening notes |
 |---|---|---|
-| api, auth, sms-mock, issuer-mock | `mcr.microsoft.com/dotnet/aspnet:10.0` | runs as non-root via `USER $APP_UID`; installs `curl` for the Compose healthcheck; Compose adds a read-only root, dropped capabilities, `no-new-privileges`, a 64 MiB `/tmp`, and limits |
-| migrator | `mcr.microsoft.com/dotnet/runtime:10.0` | no healthcheck; one-shot process; same Compose hardening and limits |
-| web | `nginx:1.31-alpine` | runs as the unprivileged `nginx` user on port 8080; `nginx-module-xslt` and `libxslt` are removed; uses `wget` in the healthcheck; same hardening and limits |
+| api, auth, sms-mock, issuer-mock | `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra` | no shell, package manager, or `curl`; runs as UID 1654 (`$APP_UID`); the Compose healthcheck is the in-image `dotnet /healthprobe/SmeDemo.HealthProbe.dll` probe; Compose adds a read-only root, dropped capabilities, `no-new-privileges`, a 64 MiB `/tmp`, and limits |
+| migrator | `mcr.microsoft.com/dotnet/runtime:10.0-noble-chiseled-extra` | no shell or package manager; no healthcheck; one-shot process; same Compose hardening and limits |
+| web | `nginx:1.31-alpine` | runs as the unprivileged `nginx` user on port 8080; `nginx-module-xslt` and `libxslt` are removed; still ships a shell and uses `wget` in the healthcheck; same hardening and limits |
 | mssql, db-grants | `mcr.microsoft.com/mssql/server:2022-latest` | digest-pinned; mssql keeps `no-new-privileges` and CPU/memory limits only because its entrypoint must prepare the data volume; db-grants keeps the same two controls |
 | azurite | `mcr.microsoft.com/azure-storage/azurite` | digest-pinned; same Compose hardening and limits as the application services |
 | build stages only | `mcr.microsoft.com/dotnet/sdk:10.0`, `node:22-bookworm-slim` | not part of the runtime attack surface |
@@ -432,41 +432,62 @@ and `db-grants` are the documented exception to the read-only/capability drop.
 `docker-compose.vs.debug.yml` relaxes `read_only` and adds `SYS_PTRACE` for the
 Visual Studio debugger only, and `docker compose up` never reads that file.
 
-DHI is **not required for the demo** and is not a drop-in replacement for the
-current Dockerfiles:
+The .NET runtime stages are Microsoft chiseled images: no shell, no package
+manager, and no `curl`. They use the `-extra` variant because
+`Microsoft.Data.SqlClient` 6.1.7 rejects invariant globalization; the standard
+chiseled variant has no ICU and cannot be used by api, auth, or the migrator.
+`-extra` adds ICU/tzdata but still has no shell or package manager. The Compose
+healthcheck is a small dependency-free .NET console app (`tools/HealthProbe`)
+built in an SDK stage and copied to `/healthprobe`; it performs the same
+`GET /healthz` / `GET /readyz` check and success/failure outcome that
+`curl -fsS` used to. The auth image creates `/keys` in an SDK stage and copies
+it with the application user's ownership, so no runtime `chown` or shell is
+needed. The migrator also has no shell, but needs no healthcheck.
 
-- The API, auth, sms-mock, and issuer-mock images install `curl` with `apt-get`
-  and use `CMD-SHELL curl` healthchecks. DHI runtime variants have no package
-  manager or shell, so both would need to change.
-- The web image's entrypoint script and healthcheck assume a shell and `wget`;
-  any replacement must preserve the unprivileged `nginx` user, port 8080, and
-  the `/tmp/config.js` path.
-- The migrator has no healthcheck, but its base image and certificate/runtime
+Because `/bin/sh` is absent from these images, `docker compose exec <service> sh`
+is not available for `api`, `auth`, `sms-mock`, `issuer-mock`, or the migrator.
+Use `dotnet`, `docker inspect`, the container logs, or copies out of the
+container instead; writing into a read-only-root container is refused. See
+[`development.md#container-runtime-hardening`](development.md#container-runtime-hardening).
+`web` remains the one runtime image with a shell and `wget`.
+
+DHI is **not required for the demo**, and it is not a drop-in replacement for
+the current Dockerfiles:
+
+- The .NET images already use Microsoft's chiseled variant, which removes the
+  shell and package manager while remaining continuously patched and
+  digest-pinned. DHI would add Docker-maintained patching, SBOM, and provenance
+  on top of that, but requires registry access/terms and a different tag and
+  image layout.
+- The web image's entrypoint script and healthcheck still assume a shell and
+  `wget`; any replacement must preserve the unprivileged `nginx` user, port 8080,
+  and the `/tmp/config.js` path.
+- The migrator has no healthcheck, but its chiseled base and certificate/runtime
   dependencies still need validation against the target SQL Server.
 - The .NET DHI examples use different tags and image layouts; a migration must
   be tested with the real Compose stack and the smoke script.
 
 ### Recommendation
 
-For an Azure production landing, keep a separate **container hardening** work
-item. The current CI change closes the runtime and supply-chain items that do
-not need a base-image migration, but it does not replace DHI or remove the
-shell from the images:
+For an Azure production landing, the container hardening work item is mostly
+closed for the .NET services, but the platform and web image still need work:
 
-1. **Open — hardened base images.** Choose a hardened runtime base per service:
-   DHI Community, Microsoft chiseled images, or an internally approved
-   distroless base.
-2. **Done — multi-stage builds.** Only the runtime stage ships; the SDK and Node
-   stages stay out of the final image.
-3. **Open — remove shell/`curl` from the runtime image.** Move health checks to
-   an external probe or a supported health-check binary, and update Compose and
-   the deployment probes together. External probes are not implemented.
-4. **Done in Compose, open in the images and the platform.** The .NET services
-   and nginx run as non-root, and the CLI stack uses a read-only root filesystem,
-   `no-new-privileges`, and dropped capabilities, but the runtime images still
-   ship a shell (and the API, auth, and mock images also ship `curl`), and a
-   deployment must reproduce the same security context in its pod or container
-   definition.
+1. **Done — hardened .NET base images.** The API, auth, both mocks, and the
+   migrator use Microsoft chiseled images. DHI Community remains an evaluation
+   item ([ADR-019](reference/adr/ADR-019-chiseled-runtime-images-and-health-probe.md)),
+   not a current dependency.
+2. **Done — multi-stage builds.** Only the runtime stage ships; the SDK, probe
+   build stage, and Node stages stay out of the final image.
+3. **Done for .NET — remove shell/`curl` from the runtime image.** The
+   in-image .NET probe replaces `curl`; the images have no `/bin/sh`. **Open for
+   `web`:** nginx still needs a shell and `wget`, so removing them requires a
+   shell-free web image or an external probe for that one service.
+4. **Done in Compose and the .NET images, open on the platform.** The .NET
+   services and nginx run as non-root, and the CLI stack uses a read-only root
+   filesystem, `no-new-privileges`, and dropped capabilities. A deployment must
+   still reproduce the same security context in its pod or container definition,
+   and orchestrator probes should call the HTTP endpoints directly instead of
+   exec-ing the in-image probe.
 5. **Done — digest pinning, image scanning, and SBOMs.** Base images are pinned
    by tag and digest, Dependabot updates them weekly, and CI scans the built
    images and publishes CycloneDX SBOMs. Provenance/SLSA attestation remains

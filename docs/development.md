@@ -79,7 +79,9 @@ You should see `users` and `__EFMigrationsHistory`.
 
 `auth` is checked with `/healthz` liveness; `api`'s Compose healthcheck calls
 `/readyz`, which proves SQL Server, Blob Storage, and auth metadata are
-reachable. Both endpoints are anonymous:
+reachable. Both endpoints are anonymous. Compose runs these checks with the
+in-image `SmeDemo.HealthProbe` (`dotnet /healthprobe/SmeDemo.HealthProbe.dll`)
+because the .NET runtime images have no shell or `curl`:
 
 ```powershell
 Invoke-RestMethod http://localhost:8081/healthz   # {"status":"ok"}
@@ -842,20 +844,33 @@ Every service also declares CPU and memory limits (for example `api` 1 CPU /
 512 MiB, `web` 0.5 CPU / 128 MiB, `mssql` 2 CPU / 2 GiB). The one-shot services
 keep their `restart: "no"` behaviour.
 
+The .NET runtime images are Microsoft chiseled `-extra` images: no shell,
+package manager, or `curl`. `-extra` is required because `Microsoft.Data.SqlClient`
+rejects invariant globalization; it provides ICU/tzdata without a shell. Auth
+creates `/keys` with the application user's ownership in an SDK stage, and the
+Compose healthchecks use the in-image
+`SmeDemo.HealthProbe` instead of `curl`. A read-only root filesystem means a
+process that tries to write outside `/tmp` or a mounted volume fails; show that
+without a shell with `docker compose cp .env.example api:/nope` (fails), and
+confirm the `/tmp` tmpfs with `docker inspect`. Docker's copy path refuses writes
+into any path in a read-only-root container, so copying into `/tmp` fails too; it
+is not a way to prove tmpfs writability. Use `docker inspect`, `docker compose
+logs`, or `dotnet` for the other checks; `docker compose exec api sh` is expected
+to fail because there is no shell.
+
 The web runtime is `nginx:1.31-alpine` (digest-pinned), runs as the unprivileged
 `nginx` user on port 8080, and publishes only `127.0.0.1:8080:8080`. The build
 removes `nginx-module-xslt` and `libxslt` because the configuration never loads
 XSLT. `/config.js` is generated into `/tmp` and served with
-`Cache-Control: no-store`. A read-only root filesystem means a process that
-tries to write outside `/tmp` or a mounted volume fails; use
-`docker compose exec <service> sh -c 'echo ok > /tmp/probe'` to prove `/tmp` is
-writable and `touch /nope` to prove the root is not. Visual Studio debugging
-relaxes this in `docker-compose.vs.debug.yml` (`read_only: false` plus
+`Cache-Control: no-store`. `web` is the one runtime image that still has a
+shell and uses `wget` in its healthcheck. Visual Studio debugging relaxes the
+CLI hardening in `docker-compose.vs.debug.yml` (`read_only: false` plus
 `SYS_PTRACE`), which `docker compose up` never reads, so the CLI stack stays
-hardened. For failure triage, see the write-failure rows in
-[Troubleshooting](#troubleshooting); the operational procedures are in
-[`runbook.md`](runbook.md), and the rationale is in
-[ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md).
+hardened; the `base` stage still carries the probe for Fast mode. For failure
+triage, see the write-failure rows in [Troubleshooting](#troubleshooting); the
+operational procedures are in [`runbook.md`](runbook.md), and the rationale is
+in [ADR-019](reference/adr/ADR-019-chiseled-runtime-images-and-health-probe.md)
+and [ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md).
 
 ### Observability
 
@@ -915,10 +930,15 @@ With the full stack running (`docker compose up -d --build`), these runtime
 checks exercise the hardening and the observability contracts:
 
 ```powershell
-# Read-only root filesystem: /tmp is writable, anything else is not.
+# Read-only root: copying into it fails; /tmp is the mounted tmpfs.
 docker inspect --format '{{.HostConfig.ReadonlyRootfs}}' (docker compose ps -q api)
-docker compose exec -T api sh -c 'touch /nope'          # expected to fail
-docker compose exec -T api sh -c 'echo ok > /tmp/probe' # expected to succeed
+docker inspect --format '{{json .HostConfig.Tmpfs}}' (docker compose ps -q api)
+docker compose cp .env.example api:/nope          # expected to fail (read-only)
+# Docker cp also refuses writes under /tmp when the rootfs is read-only.
+docker compose cp .env.example api:/tmp/probe     # expected to fail
+
+# The .NET images have no shell; this must fail with "no such file or directory".
+docker compose exec -T api sh -c 'true'
 
 # A valid X-Request-Id is echoed back; an invalid one is replaced by the trace id.
 $response = Invoke-WebRequest http://localhost:8082/healthz `
@@ -982,12 +1002,14 @@ your operating system locally.
   through nginx on `http://localhost:8080`.
 - `X-Request-Id` echo and the JSON console logs were verified on `api` and
   `auth`; `/config.js` returned `Cache-Control: no-store`; the read-only root
-  filesystem was enforced (`touch /nope` fails, `/tmp` stays writable); and all
-  six images scanned clean under the Trivy gate.
-- GitHub Actions ran green for PR 2, run #8 at `ee9554b`. The updated workflow
-  described above (SDK from `global.json`, SBOM/Trivy image gate, hardened
-  images) has not yet run on GitHub for this change, and Azure Pipelines has not
-  been queued.
+  was inspected and Docker refuses copies into it; the `/tmp` tmpfs is mounted
+  with the expected size; and all six images scanned clean under the Trivy gate.
+- The five .NET images were rebuilt on chiseled `-extra` bases and checked for
+  no shell, no package manager, no `curl`, a working `/healthprobe`, and an
+  auth-keys volume owned by `1654:1654`. This was a local real-stack verification
+  before the pull request was opened; GitHub Actions has not yet run for it.
+- GitHub Actions was green for PR 3 (`43553676907` at `eb96829` and
+  `43560262538` at `bd33c08`); Azure Pipelines has not been queued.
 
 ## Everyday commands
 
@@ -1100,6 +1122,7 @@ reset. Do not use it on a database you care about.
 | Auth exits at start-up | `DEMO_MODE=false` with `DEMO_OTP` set, or no `SMS_PROVIDER_URL` | remove `DEMO_OTP`, set the SMS URL, or enable demo mode |
 | Login or resend returns `503` `UPSTREAM_UNAVAILABLE` | `sms-mock` is stopped or `SMS_PROVIDER_URL` is wrong | `docker compose ps sms-mock`, check `docker compose logs auth` and the URL, then `docker compose start sms-mock` |
 | Auth cannot write `/keys` | key volume not writable by the app user | `docker compose down -v` to recreate the volume |
+| `docker compose exec api sh` fails with `no such file or directory` | the .NET runtime images are chiseled and have no shell | expected: use `docker inspect`, `docker compose logs`, copying files out, or `docker compose exec api dotnet ...`; `web` still has a shell |
 | `api` unhealthy or restarts | Azurite/Table/Blob not ready, or SQL login lacks rights | check `docker compose logs api`: the seeder retries 20 times, then stops the host; check `docker compose ps azurite` and `db-grants` |
 | `api` unhealthy but `/healthz` returns 200 | `/readyz` cannot reach SQL Server, Blob Storage, or auth metadata | `Invoke-WebRequest -SkipHttpErrorCheck http://localhost:8082/readyz`; the `checks` array names the failed dependency; check `docker compose logs api` |
 | Every authenticated `/api/v1` call returns `503` `UPSTREAM_UNAVAILABLE` | auth metadata/JWKS fetch failed at the transport layer | check `docker compose ps auth`, `AUTH_METADATA_URL`, and `AUTH_REQUIRE_HTTPS_METADATA=false` in Compose; the response carries `Retry-After: 5` |

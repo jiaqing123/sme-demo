@@ -113,7 +113,8 @@ the merge.
       replacement. A shortcut that is not written down must not ship.
 - [ ] The change does not weaken an existing control (default-deny policy,
       `no-store` on account data, org policy, redaction, least-privilege database
-      logins, non-root containers).
+      logins, non-root containers, no shell or `curl` in the .NET runtime
+      images).
 
 ## 5. Documentation
 

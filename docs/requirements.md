@@ -864,6 +864,15 @@ Card expiry is the industry `MM/YY` form (`09/28`), not a full date.
 | `db-grants` | `mcr.microsoft.com/mssql/server:2022-latest` | none | exits 0 |
 | `azurite` | `mcr.microsoft.com/azure-storage/azurite` | none | blob and table probes |
 
+The four ASP.NET Core images and the migrator run on Microsoft's chiseled Ubuntu
+runtime images, using the `-extra` variant: no shell, package manager, or
+`curl`. The variant keeps ICU/globalization support, which
+`Microsoft.Data.SqlClient` requires. The `auth`, `api`, `sms-mock`, and
+`issuer-mock` healthchecks run the in-image `SmeDemo.HealthProbe` console app
+with `dotnet`; it performs the documented GET with a 5 second timeout and exits
+non-zero on a non-2xx response or transport failure. `web` and the vendor images
+keep their own shell-based healthchecks.
+
 Startup ordering: `mssql` healthy → `db-migrator` and `db-migrator-auth` complete
 → `db-grants` completes → `auth` → `api`;
 `api` also waits for `azurite` and for `issuer-mock` to start. `web` starts only
@@ -881,7 +890,8 @@ binds to `127.0.0.1`: the demo credential and OTP are part of the documentation,
 so the stack must not be reachable from another machine.
 
 `auth`, `sms-mock`, `issuer-mock`, and `web` healthchecks are **liveness only**:
-`/healthz` reports that the process is running. `api`'s Compose healthcheck calls
+`/healthz` reports that the process is running (the .NET services check it with
+the in-image probe; `web` uses `wget`). `api`'s Compose healthcheck calls
 `GET /readyz`, which checks SQL Server, Blob Storage, and the auth metadata
 document in parallel under a 5 second budget. It returns `200` with
 `{"status":"ready","checks":[...]}` when all three pass, and `503` with
@@ -893,7 +903,11 @@ before running the functional checks.
 
 Compose hardens its services: a read-only root filesystem,
 `cap_drop: [ALL]`, `no-new-privileges:true`, and a 64 MiB `tmpfs` at `/tmp`.
-Per-service CPU and memory limits apply across the stack (mssql 2 CPU / 2 GiB;
+The .NET runtime images are chiseled, so those services have no shell or package
+manager; `docker compose exec <service> sh` is not available there, and local
+verification uses `docker inspect`, `docker compose logs`, or copies files out
+(writing into a read-only-root container is refused). Per-service
+CPU and memory limits apply across the stack (mssql 2 CPU / 2 GiB;
 azurite 1 / 512 MiB; api 1 / 512 MiB; auth 1 / 384 MiB; sms-mock and issuer-mock
 0.5 / 192 MiB; web 0.5 / 128 MiB; migrators and db-grants 1 / 256 MiB). SQL
 Server keeps `no-new-privileges` plus its limit only because its entrypoint must
