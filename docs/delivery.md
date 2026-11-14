@@ -18,7 +18,7 @@ three loops.
 |---|---|---|---|
 | **Every change** | Pull request or push to `main` | The five CI jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): .NET build/tests/format/OpenAPI/migrations/vulnerability/full-history secret scan, web build/tests, Compose validation, image build + SBOM + Trivy, Compose smoke | A reviewed commit on `main` that is a release candidate; never a deployment by itself |
 | **Every week** | Monday Dependabot schedule; Tuesday 03:00 UTC security scan | Grouped dependency PRs, and the scheduled rebuild-and-scan workflow [`.github/workflows/security-scan.yml`](../.github/workflows/security-scan.yml) | Updated dependencies and a fresh vulnerability answer even when no code changed |
-| **Every release** | On demand, or a fixed window agreed with the demo audience | Promotion of an already-gated image digest, environment deployment, environment smoke, recorded evidence | A deployed, reproducible version that can be rolled back by digest |
+| **Every release** | On demand, or a fixed window agreed with the demo audience | Promotion of an already-gated image digest, environment deployment, environment smoke, recorded evidence | A deployed, reproducible version promoted by digest, which can be rolled back to the previous revision |
 
 PRs are **not** releases. Merging to `main` means "this commit is a release
 candidate"; it does not mean it was deployed.
@@ -119,18 +119,19 @@ not a monitoring system.
 
 Use a **fixed window plus on-demand releases**, not a release per PR:
 
-- a weekly (or biweekly) window for the demo, once the deployment line exists;
+- a weekly (or biweekly) window for the demo;
 - an extra release before a customer demo or a security fix;
 - no release just because a pull request merged.
 
-The demo currently has no real release stage: `azure-pipelines.yml` builds and
-verifies, but the Test/UAT/Production stages are excluded by default and
-deliberately fail once enabled until the real migration and rollout steps exist.
-They stay blocked until the hosting, environment-automation, and
-production-approval decisions (1–3 in
-[`azure-pipelines.md#current-open-decisions`](azure-pipelines.md#current-open-decisions))
-are answered. Until then, "release" means a green `main` and a locally verified
-Compose stack, not a deployment.
+The Azure release path is implemented (ADR-020): a release run sets both
+`publishImages` and `enableDeployments`, and the same digest set moves through
+Test, UAT, and Production. When a release run enables deployments, Test deploys
+automatically after a green `main` Build; UAT and Production each pause on their
+Environment approval. Merging a PR still does not deploy anything, and
+UAT/Production are not triggered by their own queue-time parameter. The first
+real Test deployment is still pending, so until it runs and the ADR's
+verification list is recorded, the deployment line is statically validated but
+unproven in Azure.
 
 ### Release checklist
 
@@ -143,22 +144,26 @@ notes or the deployment record:
       backward-compatible with the previous application version (expand/contract).
 - [ ] The release notes state what changed, the API version impact (ADR-012), and
       any deprecation window.
-- [ ] Images are built **once** and pushed to ACR with `publishImages=true` once
-      `acrServiceConnection` is configured; record the immutable digest, not only
-      the build tag. `acrLoginServer` is needed only when the deployment stages
-      reference the image.
-- [ ] SBOMs and the Trivy result come from the `publishImages=false` build, which
-      is the path that generates them; the publish path skips both. Scan the
-      **promoted digest** registry-side again before deployment.
-- [ ] Test environment: deploy the digest, run migrations, run the Compose or
-      environment smoke, and record the result.
-- [ ] UAT: deploy the same digest and complete the acceptance path; no rebuild.
-- [ ] Production: requires the agreed approval (Environment approval and/or
-      change ticket), deploys the same digest, and runs the post-deploy smoke.
+- [ ] Images are built **once** and pushed to ACR by the `publishImages=true`
+      Build; the Images job resolves the six immutable digests and publishes the
+      `image-digests` artefact. Record the digests, not only the build tag.
+- [ ] The promoted digests pass the registry-side Trivy gate in the same Images
+      job (`HIGH,CRITICAL`, `--ignore-unfixed`), and the CycloneDX SBOMs are
+      published as the `sboms` artefact. A local `publishImages=false` build
+      proves the same Dockerfiles but is not the release evidence.
+- [ ] Test environment: the deployment downloads the `image-digests` artefact,
+      runs the three migrator jobs, rolls out the same digests, verifies the new
+      revisions are ready, runs the public environment smoke, and publishes
+      `deployment-record-test`.
+- [ ] UAT: the same digests deploy after the `sme-demo-uat` Environment approval;
+      no rebuild. Publish `deployment-record-uat`.
+- [ ] Production: the `sme-demo-prod` Environment approval and the recorded
+      change ticket are present, the same digests deploy, the post-deploy smoke
+      passes, and `deployment-record-prod` is published.
 - [ ] The previous digest and the rollback command are written down before the
       first deployment starts.
-- [ ] The release record links commit, CI run, image digests, SBOM, scan, smoke,
-      and approvals.
+- [ ] The release record links commit, CI run, image digests, SBOM, scan,
+      `deployment-record-<env>`, smoke, and approvals.
 
 ### Promotion rules
 
@@ -229,12 +234,16 @@ and require it to leave the working tree clean and CI green before merging.
 
 These are known and deliberate, not silent omissions:
 
-1. **Azure deployment is a placeholder.** The hosting model and the other four
-   decisions in [`azure-pipelines.md#current-open-decisions`](azure-pipelines.md#current-open-decisions)
-   must be answered before Test/UAT/Prod stages can be enabled.
+1. **The Azure line is implemented but unverified until the first real
+   deployment.** Infrastructure, deploy scripts, the pipeline stages, and the
+   static checks exist (ADR-020), but nothing has run against a real
+   subscription yet. The ADR's
+   [Verification status](reference/adr/ADR-020-azure-hosting-and-test-deployment.md#verification-status)
+   is the list to prove and record before UAT is used.
 2. **No always-on registry in GitHub Actions.** The weekly scan rebuilds images
-   from `main`. Once images are pushed to ACR by digest, scan the promoted digest
-   and keep the rebuild as a fallback.
+   from `main`. Azure Pipelines now scans the promoted digest in the publish
+   path, but GitHub Actions has no standing registry credential; the rebuild
+   stays the fallback.
 3. **Branch protection is manual.** §5 is the checklist; it cannot be enforced
    from this repository.
 4. **No release tags yet.** The first real deployment should establish the tag
@@ -253,14 +262,28 @@ dotnet format SmeDemo.slnx --verify-no-changes
 docker compose config -q
 python tools/smoke/check-vulnerabilities.py
 
+# Validate the deployment assets without Azure
+az bicep build --file infra/main.bicep --stdout > $null
+Get-ChildItem tools/deploy/*.sh, web/nginx/*.sh | ForEach-Object { bash -n $_.FullName }
+
 # Full local stack (create .env from .env.example first)
 docker compose up -d --build
 bash tools/smoke/compose-smoke.sh
 docker compose down -v --remove-orphans
 
+# Deploy one environment by hand (the pipeline does the same with its variables)
+bash tools/deploy/deploy.sh
+
+# Roll an environment back to the previous revision
+bash tools/deploy/rollback.sh --environment test --resource-group rg-sme-demo-test
+
 # Re-run the weekly scan from a workstation with gh
 gh workflow run security-scan.yml
 ```
+
+The deployment scripts are driven by environment variables; the exact contract
+is the header of [`tools/deploy/deploy.sh`](../tools/deploy/deploy.sh) and the
+Azure setup is in [`azure-pipelines.md`](azure-pipelines.md#required-azure-devops-configuration).
 
 The commands that reproduce CI, including migrations, generated SQL, and OpenAPI
 regeneration, are in [`development.md`](development.md).

@@ -5,25 +5,29 @@
 # guard, vulnerability scan, secret scan, web build/tests, Compose validation,
 # container image builds, and the Compose smoke test.
 #
-# Test/UAT/Prod are deployment stages. They are skipped by default because the
-# Azure resources and service connections do not exist in this repository. Set
-# the queue-time parameters after the targets are configured:
+# The Test/UAT/Production deployment stages are implemented by
+# tools/deploy/deploy.sh against infra/main.bicep. They are skipped by default
+# because a run needs an Azure subscription prepared once by hand. Set both
+# queue-time parameters after that preparation:
 #
-#   publishImages     - push the six images to Azure Container Registry
+#   publishImages     - push the six images to Azure Container Registry, resolve
+#                       their digests, and scan the promoted digests
 #   enableDeployments - run the Test/UAT/Prod stages
 #
-# Required Azure DevOps configuration:
-#   * Environments: sme-demo-test, sme-demo-uat, sme-demo-prod.
-#     Add an approval/check to sme-demo-uat and sme-demo-prod.
-#   * A Docker registry service connection to the ACR; set acrServiceConnection.
-#   * An Azure Resource Manager service connection; set azureServiceConnection.
-#   * Pipeline variables (or a variable group) for acrLoginServer,
-#     acrServiceConnection, azureServiceConnection, and the per-environment
-#     resource names used by the real deployment steps.
+# A release run sets BOTH parameters to true. It walks Test -> UAT -> Prod,
+# deploying the same image digests throughout. UAT and Prod have no queue-time
+# trigger of their own: their manual gate is the Azure DevOps Environment
+# approval/check, which pauses the run at that stage until an approver acts.
 #
-# The deployment jobs contain deliberately failing placeholders until the real
-# migration/rollout commands are supplied. A green deployment stage that does
-# nothing would be worse than a red one.
+# Secrets are never written in this file. sqlAdminPassword,
+# SME_API_DB_PASSWORD, SME_AUTH_DB_PASSWORD, and ISSUER_API_KEY must come from
+# the per-environment variable group (optionally Key Vault-backed), by
+# convention grouped in vg-sme-demo-test, vg-sme-demo-uat, and vg-sme-demo-prod.
+# The demo credentials below are published by design; replace them and set
+# demoMode=false for any non-demo deployment.
+#
+# The one-time Azure setup is in docs/azure-pipelines.md. The decision record is
+# docs/reference/adr/ADR-020-azure-hosting-and-test-deployment.md.
 
 trigger:
   branches:
@@ -51,15 +55,48 @@ variables:
   nodeVersion: "22.x"
   trivyVersion: "0.76.2"
   trivySha256: "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf"
-  # One immutable tag per build; the same tag is promoted through every
-  # environment. $(Build.BuildId) is also pushed for readability in ACR.
+  # One tag per build. Tags are for humans; the resolved digest is the
+  # immutable promotion contract. $(Build.BuildId) is also pushed for
+  # readability in ACR.
   imageTag: $(Build.SourceVersion)
-  acrLoginServer: ""
+
+  # Resource-name prefix. infra/main.bicep caps this at 10 characters because
+  # Container App and job names must stay within 32 characters.
+  namePrefix: smedemo
+
+  # Registry identity. acrName is the registry *name* used by the az CLI
+  # (az acr ...); the login server for image references comes from the
+  # image-digests artefact, so there is no separate variable to get out of step.
+  acrName: ""
+  # Docker registry service connection used by Docker@2 to push.
   acrServiceConnection: ""
+  # Azure Resource Manager service connection used by AzureCLI@2 and the
+  # deployment stages. Must be authorised to deploy to every target group.
   azureServiceConnection: ""
-  testResourceGroup: ""
-  uatResourceGroup: ""
-  prodResourceGroup: ""
+
+  location: "australiaeast"
+  sqlAdminLogin: "smeadmin"
+
+  # Default target resource groups. A per-environment variable group may
+  # override its own group's value; the registry must live in the target group
+  # because the single-file template creates the AcrPull role assignment there.
+  testResourceGroup: "rg-sme-demo-test"
+  uatResourceGroup: "rg-sme-demo-uat"
+  prodResourceGroup: "rg-sme-demo-prod"
+
+  # Published demo values (not secrets). deploy.sh requires all of them, and
+  # infra/main.bicep marks DEMO_MODE, DEMO_USERNAME, DEMO_PASSWORD, and DEMO_OTP
+  # as plain parameters on purpose. Replace them before a non-demo deployment.
+  orgId: "sme"
+  demoMode: "true"
+  demoUsername: "demo"
+  demoPassword: "Demo_Passw0rd!"
+  demoOtp: "123456"
+
+  # Secret variables, deliberately not defined here: sqlAdminPassword,
+  # SME_API_DB_PASSWORD, SME_AUTH_DB_PASSWORD, and ISSUER_API_KEY come from the
+  # per-environment variable group (vg-sme-demo-<env>), optionally linked to
+  # Key Vault. Adding them to this file would commit a secret.
 
 stages:
   - stage: Build
@@ -203,7 +240,7 @@ stages:
         displayName: Compose validation
         pool:
           vmImage: ubuntu-latest
-        timeoutInMinutes: 5
+        timeoutInMinutes: 10
         steps:
           - checkout: self
 
@@ -213,6 +250,27 @@ stages:
           - script: docker compose config -q
             displayName: Validate compose file
 
+          # The deployment assets are statically validated on every build, so a
+          # broken template or script fails in the Build stage rather than in
+          # the first deployment. This job is deliberately still one job: its
+          # display name is one of the five contractual checks.
+          - bash: |
+              set -euo pipefail
+              az bicep install
+              az bicep build --file infra/main.bicep --stdout > /dev/null
+            displayName: Validate Bicep template
+
+          - bash: |
+              set -euo pipefail
+              shopt -s nullglob
+              scripts=(tools/deploy/*.sh web/nginx/*.sh)
+              [ "${#scripts[@]}" -gt 0 ] || { echo "No deployment shell scripts found" >&2; exit 1; }
+              for script in "${scripts[@]}"; do
+                bash -n "$script"
+                echo "OK: $script"
+              done
+            displayName: Check deployment shell script syntax
+
       - job: Images
         displayName: Build container images
         pool:
@@ -221,8 +279,22 @@ stages:
         steps:
           - checkout: self
 
-          # With publishImages=false this only proves the Dockerfiles on the
-          # agent. With publishImages=true the same build is pushed to ACR.
+          # Pinned and checksum-verified, matching the GitHub workflow. Installed
+          # in both modes: the local build scans the local tags, and the publish
+          # path scans the promoted digests.
+          - bash: |
+              set -euo pipefail
+              archive="$(Agent.TempDirectory)/trivy.tar.gz"
+              curl -fsSL --retry 3 -o "$archive" \
+                "https://github.com/aquasecurity/trivy/releases/download/v$(trivyVersion)/trivy_$(trivyVersion)_Linux-64bit.tar.gz"
+              echo "$(trivySha256)  ${archive}" | sha256sum --check --strict
+              tar -xzf "$archive" -C "$(Agent.TempDirectory)" trivy
+            displayName: Install Trivy
+
+          # With publishImages=true the images are pushed to ACR, the tag is
+          # resolved to six immutable digests, and those digests are scanned.
+          # Test/UAT/Prod consume the published image-digests artefact and never
+          # rebuild.
           - ${{ if eq(parameters.publishImages, true) }}:
               - task: Docker@2
                 displayName: Build and push api
@@ -295,6 +367,72 @@ stages:
                   tags: |
                     $(imageTag)
                     $(Build.BuildId)
+
+              # Resolve the just-pushed tag to one immutable digest per image.
+              # The JSON is the deployment contract for every environment.
+              - task: AzureCLI@2
+                displayName: Resolve image digests
+                inputs:
+                  azureSubscription: $(azureServiceConnection)
+                  scriptType: bash
+                  scriptLocation: inlineScript
+                  addSpnToEnvironment: true
+                  inlineScript: |
+                    set -euo pipefail
+                    cd "$(Build.SourcesDirectory)"
+                    az acr login --name "$(acrName)"
+                    bash tools/deploy/resolve-digests.sh \
+                      --acr "$(acrName)" \
+                      --tag "$(imageTag)" \
+                      --output "$(Build.ArtifactStagingDirectory)/image-digests/images.json"
+
+              - task: PublishPipelineArtifact@1
+                displayName: Publish image digests
+                inputs:
+                  targetPath: "$(Build.ArtifactStagingDirectory)/image-digests"
+                  artifact: image-digests
+
+              # SBOMs are build artefacts: generate them before the gate so a
+              # failing scan still leaves the inventory behind. The reference is
+              # the digest, not the tag, so the SBOM describes exactly what is
+              # promoted. az acr login above left the docker credential in place.
+              - bash: |
+                  set -euo pipefail
+                  images_json="$(Build.ArtifactStagingDirectory)/image-digests/images.json"
+                  mkdir -p "$(Agent.TempDirectory)/sbom"
+                  for image in api auth web sms-mock issuer-mock migrator; do
+                    reference="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["images"][sys.argv[2]])' "$images_json" "$image")"
+                    "$(Agent.TempDirectory)/trivy" image \
+                      --scanners vuln --timeout 15m \
+                      --format cyclonedx \
+                      --output "$(Agent.TempDirectory)/sbom/sme-demo-${image}.cdx.json" \
+                      "$reference"
+                  done
+                displayName: Generate CycloneDX SBOMs from promoted digests
+
+              - task: PublishPipelineArtifact@1
+                displayName: Publish SBOMs
+                inputs:
+                  targetPath: "$(Agent.TempDirectory)/sbom"
+                  artifact: sboms
+
+              # Same gate and flags as the local path, applied registry-side to
+              # the promoted digest. A fixable HIGH/CRITICAL finding fails here,
+              # before any environment can consume the digest.
+              - bash: |
+                  set -euo pipefail
+                  images_json="$(Build.ArtifactStagingDirectory)/image-digests/images.json"
+                  for image in api auth web sms-mock issuer-mock migrator; do
+                    reference="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["images"][sys.argv[2]])' "$images_json" "$image")"
+                    "$(Agent.TempDirectory)/trivy" image \
+                      --scanners vuln --timeout 15m \
+                      --severity HIGH,CRITICAL \
+                      --ignore-unfixed \
+                      --exit-code 1 \
+                      "$reference"
+                  done
+                displayName: Scan promoted digests for vulnerabilities
+
           - ${{ else }}:
               - bash: |
                   set -euo pipefail
@@ -311,19 +449,6 @@ stages:
                   docker build --file tools/Migrator/Dockerfile \
                     --tag "sme-demo-migrator:$(imageTag)" .
                 displayName: Build local images
-
-          # The scan runs against the locally built images, so it is skipped
-          # when publishing to ACR (Docker@2 pushes without keeping local tags).
-          # Pinned and checksum-verified, matching the GitHub workflow.
-          - ${{ if eq(parameters.publishImages, false) }}:
-              - bash: |
-                  set -euo pipefail
-                  archive="$(Agent.TempDirectory)/trivy.tar.gz"
-                  curl -fsSL --retry 3 -o "$archive" \
-                    "https://github.com/aquasecurity/trivy/releases/download/v$(trivyVersion)/trivy_$(trivyVersion)_Linux-64bit.tar.gz"
-                  echo "$(trivySha256)  ${archive}" | sha256sum --check --strict
-                  tar -xzf "$archive" -C "$(Agent.TempDirectory)" trivy
-                displayName: Install Trivy
 
               - bash: |
                   set -euo pipefail
@@ -431,109 +556,239 @@ stages:
   # The deployment stages are included only when the queue-time parameter is
   # true. Compile-time inclusion avoids relying on runtime boolean-parameter
   # rendering in condition expressions.
+  #
+  # Each deploy job downloads the image-digests artefact produced by this same
+  # run, binds its environment's variable group, and calls deploy.sh. No stage
+  # rebuilds an image. The Test environment has no approval; UAT and Prod pause
+  # on their Environment approval/check, which is their only manual gate.
   - ${{ if eq(parameters.enableDeployments, true) }}:
     - stage: DeployTest
       displayName: Deploy Test
       dependsOn: Build
+      # Test deploys automatically, but only for a main build: a pull-request
+      # run must never reach an environment even if enableDeployments is set.
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
       jobs:
         - deployment: DeployTest
           displayName: Deploy to Test
           environment: sme-demo-test
           pool:
             vmImage: ubuntu-latest
+          timeoutInMinutes: 60
+          variables:
+            - group: vg-sme-demo-test
           strategy:
             runOnce:
               deploy:
                 steps:
                   - checkout: self
 
-                  # Replace this placeholder with the real test deployment:
-                  # migrate the database, roll out the image digest, then run
-                  # environment-specific smoke checks.
+                  # Artifact published by the Images job. A release run must
+                  # also set publishImages=true, or there is nothing to deploy.
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download image digests
+                    inputs:
+                      buildType: current
+                      artifactName: image-digests
+                      targetPath: "$(Pipeline.Workspace)/image-digests"
+
+                  - task: AzureCLI@2
+                    displayName: Deploy to Test
+                    inputs:
+                      azureSubscription: $(azureServiceConnection)
+                      scriptType: bash
+                      scriptLocation: inlineScript
+                      addSpnToEnvironment: true
+                      inlineScript: |
+                        set -euo pipefail
+                        bash tools/deploy/deploy.sh
+                    env:
+                      ENVIRONMENT_NAME: test
+                      RESOURCE_GROUP: $(testResourceGroup)
+                      LOCATION: $(location)
+                      ACR_NAME: $(acrName)
+                      NAME_PREFIX: $(namePrefix)
+                      IMAGES_JSON: $(Pipeline.Workspace)/image-digests/images.json
+                      SOURCE_COMMIT: $(Build.SourceVersion)
+                      DEPLOYMENT_RECORD_FILE: $(Build.ArtifactStagingDirectory)/deployment-record.json
+                      SQL_ADMIN_LOGIN: $(sqlAdminLogin)
+                      SQL_ADMIN_PASSWORD: $(sqlAdminPassword)
+                      SME_API_DB_PASSWORD: $(SME_API_DB_PASSWORD)
+                      SME_AUTH_DB_PASSWORD: $(SME_AUTH_DB_PASSWORD)
+                      ISSUER_API_KEY: $(ISSUER_API_KEY)
+                      ORG_ID: $(orgId)
+                      DEMO_MODE: $(demoMode)
+                      DEMO_USERNAME: $(demoUsername)
+                      DEMO_PASSWORD: $(demoPassword)
+                      DEMO_OTP: $(demoOtp)
+
+                  # A failed deployment may stop before deploy.sh writes the
+                  # record. Write a minimal failure record so the artifact
+                  # still captures what happened, instead of failing the
+                  # publish task for a missing file.
                   - bash: |
                       set -euo pipefail
-                      : "${ACR_LOGIN_SERVER:?Set the acrLoginServer pipeline variable.}"
-                      : "${AZURE_SERVICE_CONNECTION:?Set the azureServiceConnection pipeline variable.}"
-                      : "${RESOURCE_GROUP:?Set the testResourceGroup pipeline variable.}"
-                      echo "Deploy target: test"
-                      echo "Resource group: ${RESOURCE_GROUP}"
-                      echo "Image: ${ACR_LOGIN_SERVER}/sme-demo/api:${IMAGE_TAG}"
-                      echo "##vso[task.logissue type=error]The test deployment placeholder is still in place. Configure the test resources and replace these steps."
-                      exit 1
-                    displayName: "Placeholder: deploy to Test"
-                    env:
-                      ACR_LOGIN_SERVER: $(acrLoginServer)
-                      AZURE_SERVICE_CONNECTION: $(azureServiceConnection)
-                      RESOURCE_GROUP: $(testResourceGroup)
-                      IMAGE_TAG: $(imageTag)
+                      record="$(Build.ArtifactStagingDirectory)/deployment-record.json"
+                      if [ ! -f "$record" ]; then
+                        printf '{"environment":"test","status":"failed","note":"the deployment did not reach the record step"}\n' > "$record"
+                      fi
+                    displayName: Ensure deployment record exists
+                    condition: succeededOrFailed()
+
+                  - task: PublishPipelineArtifact@1
+                    displayName: Publish deployment record
+                    condition: succeededOrFailed()
+                    inputs:
+                      targetPath: "$(Build.ArtifactStagingDirectory)/deployment-record.json"
+                      artifact: deployment-record-test
 
   - ${{ if eq(parameters.enableDeployments, true) }}:
     - stage: DeployUat
       displayName: Deploy UAT
       dependsOn: DeployTest
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
       jobs:
         - deployment: DeployUat
           displayName: Deploy to UAT
+          # Approval/check on this Environment is the manual gate. There is no
+          # separate queue-time trigger for UAT.
           environment: sme-demo-uat
           pool:
             vmImage: ubuntu-latest
+          timeoutInMinutes: 60
+          variables:
+            - group: vg-sme-demo-uat
           strategy:
             runOnce:
               deploy:
                 steps:
                   - checkout: self
 
-                  # Same contract as Test. The sme-demo-uat environment should
-                  # carry the UAT approval/check in Azure DevOps.
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download image digests
+                    inputs:
+                      buildType: current
+                      artifactName: image-digests
+                      targetPath: "$(Pipeline.Workspace)/image-digests"
+
+                  - task: AzureCLI@2
+                    displayName: Deploy to UAT
+                    inputs:
+                      azureSubscription: $(azureServiceConnection)
+                      scriptType: bash
+                      scriptLocation: inlineScript
+                      addSpnToEnvironment: true
+                      inlineScript: |
+                        set -euo pipefail
+                        bash tools/deploy/deploy.sh
+                    env:
+                      ENVIRONMENT_NAME: uat
+                      RESOURCE_GROUP: $(uatResourceGroup)
+                      LOCATION: $(location)
+                      ACR_NAME: $(acrName)
+                      NAME_PREFIX: $(namePrefix)
+                      IMAGES_JSON: $(Pipeline.Workspace)/image-digests/images.json
+                      SOURCE_COMMIT: $(Build.SourceVersion)
+                      DEPLOYMENT_RECORD_FILE: $(Build.ArtifactStagingDirectory)/deployment-record.json
+                      SQL_ADMIN_LOGIN: $(sqlAdminLogin)
+                      SQL_ADMIN_PASSWORD: $(sqlAdminPassword)
+                      SME_API_DB_PASSWORD: $(SME_API_DB_PASSWORD)
+                      SME_AUTH_DB_PASSWORD: $(SME_AUTH_DB_PASSWORD)
+                      ISSUER_API_KEY: $(ISSUER_API_KEY)
+                      ORG_ID: $(orgId)
+                      DEMO_MODE: $(demoMode)
+                      DEMO_USERNAME: $(demoUsername)
+                      DEMO_PASSWORD: $(demoPassword)
+                      DEMO_OTP: $(demoOtp)
+
                   - bash: |
                       set -euo pipefail
-                      : "${ACR_LOGIN_SERVER:?Set the acrLoginServer pipeline variable.}"
-                      : "${AZURE_SERVICE_CONNECTION:?Set the azureServiceConnection pipeline variable.}"
-                      : "${RESOURCE_GROUP:?Set the uatResourceGroup pipeline variable.}"
-                      echo "Deploy target: uat"
-                      echo "Resource group: ${RESOURCE_GROUP}"
-                      echo "Image: ${ACR_LOGIN_SERVER}/sme-demo/api:${IMAGE_TAG}"
-                      echo "##vso[task.logissue type=error]The UAT deployment placeholder is still in place. Configure the UAT resources and replace these steps."
-                      exit 1
-                    displayName: "Placeholder: deploy to UAT"
-                    env:
-                      ACR_LOGIN_SERVER: $(acrLoginServer)
-                      AZURE_SERVICE_CONNECTION: $(azureServiceConnection)
-                      RESOURCE_GROUP: $(uatResourceGroup)
-                      IMAGE_TAG: $(imageTag)
+                      record="$(Build.ArtifactStagingDirectory)/deployment-record.json"
+                      if [ ! -f "$record" ]; then
+                        printf '{"environment":"uat","status":"failed","note":"the deployment did not reach the record step"}\n' > "$record"
+                      fi
+                    displayName: Ensure deployment record exists
+                    condition: succeededOrFailed()
+
+                  - task: PublishPipelineArtifact@1
+                    displayName: Publish deployment record
+                    condition: succeededOrFailed()
+                    inputs:
+                      targetPath: "$(Build.ArtifactStagingDirectory)/deployment-record.json"
+                      artifact: deployment-record-uat
 
   - ${{ if eq(parameters.enableDeployments, true) }}:
     - stage: DeployProd
       displayName: Deploy Production
       dependsOn: DeployUat
+      condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
       jobs:
         - deployment: DeployProd
           displayName: Deploy to Production
+          # Approval/check on this Environment, plus the business change
+          # ticket recorded in the run, is the manual gate. There is no
+          # separate queue-time trigger for Production.
           environment: sme-demo-prod
           pool:
             vmImage: ubuntu-latest
+          timeoutInMinutes: 60
+          variables:
+            - group: vg-sme-demo-prod
           strategy:
             runOnce:
               deploy:
                 steps:
                   - checkout: self
 
-                  # Production must be gated by the sme-demo-prod environment's
-                  # approval/check. The deployment itself is intentionally
-                  # unimplemented until the hosting model is chosen.
+                  - task: DownloadPipelineArtifact@2
+                    displayName: Download image digests
+                    inputs:
+                      buildType: current
+                      artifactName: image-digests
+                      targetPath: "$(Pipeline.Workspace)/image-digests"
+
+                  - task: AzureCLI@2
+                    displayName: Deploy to Production
+                    inputs:
+                      azureSubscription: $(azureServiceConnection)
+                      scriptType: bash
+                      scriptLocation: inlineScript
+                      addSpnToEnvironment: true
+                      inlineScript: |
+                        set -euo pipefail
+                        bash tools/deploy/deploy.sh
+                    env:
+                      ENVIRONMENT_NAME: prod
+                      RESOURCE_GROUP: $(prodResourceGroup)
+                      LOCATION: $(location)
+                      ACR_NAME: $(acrName)
+                      NAME_PREFIX: $(namePrefix)
+                      IMAGES_JSON: $(Pipeline.Workspace)/image-digests/images.json
+                      SOURCE_COMMIT: $(Build.SourceVersion)
+                      DEPLOYMENT_RECORD_FILE: $(Build.ArtifactStagingDirectory)/deployment-record.json
+                      SQL_ADMIN_LOGIN: $(sqlAdminLogin)
+                      SQL_ADMIN_PASSWORD: $(sqlAdminPassword)
+                      SME_API_DB_PASSWORD: $(SME_API_DB_PASSWORD)
+                      SME_AUTH_DB_PASSWORD: $(SME_AUTH_DB_PASSWORD)
+                      ISSUER_API_KEY: $(ISSUER_API_KEY)
+                      ORG_ID: $(orgId)
+                      DEMO_MODE: $(demoMode)
+                      DEMO_USERNAME: $(demoUsername)
+                      DEMO_PASSWORD: $(demoPassword)
+                      DEMO_OTP: $(demoOtp)
+
                   - bash: |
                       set -euo pipefail
-                      : "${ACR_LOGIN_SERVER:?Set the acrLoginServer pipeline variable.}"
-                      : "${AZURE_SERVICE_CONNECTION:?Set the azureServiceConnection pipeline variable.}"
-                      : "${RESOURCE_GROUP:?Set the prodResourceGroup pipeline variable.}"
-                      echo "Deploy target: prod"
-                      echo "Resource group: ${RESOURCE_GROUP}"
-                      echo "Image: ${ACR_LOGIN_SERVER}/sme-demo/api:${IMAGE_TAG}"
-                      echo "##vso[task.logissue type=error]The production deployment placeholder is still in place. Configure the production resources, approvals, and replace these steps."
-                      exit 1
-                    displayName: "Placeholder: deploy to Production"
-                    env:
-                      ACR_LOGIN_SERVER: $(acrLoginServer)
-                      AZURE_SERVICE_CONNECTION: $(azureServiceConnection)
-                      RESOURCE_GROUP: $(prodResourceGroup)
-                      IMAGE_TAG: $(imageTag)
+                      record="$(Build.ArtifactStagingDirectory)/deployment-record.json"
+                      if [ ! -f "$record" ]; then
+                        printf '{"environment":"prod","status":"failed","note":"the deployment did not reach the record step"}\n' > "$record"
+                      fi
+                    displayName: Ensure deployment record exists
+                    condition: succeededOrFailed()
+
+                  - task: PublishPipelineArtifact@1
+                    displayName: Publish deployment record
+                    condition: succeededOrFailed()
+                    inputs:
+                      targetPath: "$(Build.ArtifactStagingDirectory)/deployment-record.json"
+                      artifact: deployment-record-prod

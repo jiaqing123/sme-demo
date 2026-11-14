@@ -3,16 +3,27 @@
 This document describes the Azure Pipelines delivery pipeline in
 [`azure-pipelines.yml`](../azure-pipelines.yml). It complements the GitHub
 Actions workflow in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml):
-GitHub Actions remains the fast pull-request feedback loop, while Azure
-Pipelines is intended to become the formal build, environment promotion, and
-release pipeline. The cadence, promotion-by-digest rules, and release checklist
-are in [`delivery.md`](delivery.md); this document describes the pipeline wiring.
+GitHub Actions remains the fast pull-request feedback loop, and Azure Pipelines
+is the formal build, environment promotion, and release pipeline. The hosting
+decision is recorded in
+[ADR-020](reference/adr/ADR-020-azure-hosting-and-test-deployment.md). The
+cadence, promotion-by-digest rules, and release checklist are in
+[`delivery.md`](delivery.md); this document describes the pipeline wiring and
+the one-time Azure setup.
 
-The Build stage is fully implemented and mirrors the GitHub Actions gates. The
-Test, UAT, and Production stages are deliberately safe placeholders: they are
-excluded unless explicitly enabled, and, once enabled, they fail until the real
-migration and rollout steps are supplied. A deployment stage that does nothing
-and reports success would be more dangerous than one that fails loudly.
+The Build stage mirrors the GitHub Actions gates. The Test, UAT, and Production
+stages are implemented: they call [`tools/deploy/deploy.sh`](../tools/deploy/deploy.sh),
+which deploys [`infra/main.bicep`](../infra/main.bicep), runs the three migrator
+jobs in order, waits for the new revisions, records the deployment, and runs the
+public smoke test. The stages are still excluded unless `enableDeployments=true`,
+because a run needs the one-time Azure preparation in
+[Required Azure DevOps configuration](#required-azure-devops-configuration).
+
+The implementation has been statically validated by review, `az bicep build`,
+`bash -n`, and the normal Build gates. It has **not yet executed against a real
+Azure subscription**; ADR-020's
+[Verification status](reference/adr/ADR-020-azure-hosting-and-test-deployment.md#verification-status)
+lists what the first Test deployment must prove.
 
 ## Pipeline at a glance
 
@@ -23,19 +34,24 @@ trigger / PR
 Build
  ├─ DotNet            build, tests, format, OpenAPI, EF/SQL, package and secret gates (SDK pinned to global.json)
  ├─ Web               npm ci, build, test
- ├─ ComposeValidation docker compose config -q
- ├─ Images            build six images; generate SBOMs and scan them; optionally push to ACR
+ ├─ ComposeValidation docker compose config -q, az bicep build, bash -n on the deploy scripts
+ ├─ Images            build six images; push + resolve digests + scan them, or build + SBOM + scan locally
  └─ ComposeSmoke      start the minimal stack, wait, run the smoke script, tear down
     │
     ▼
-Deploy Test           Environment: sme-demo-test
+Deploy Test           Environment: sme-demo-test; automatic after a green Build
     │
     ▼
-Deploy UAT            Environment: sme-demo-uat, optional approval
+Deploy UAT            Environment: sme-demo-uat; Environment approval is the manual gate
     │
     ▼
-Deploy Production     Environment: sme-demo-prod, required approval
+Deploy Production     Environment: sme-demo-prod; approval plus change ticket
 ```
+
+UAT and Production have no queue-time trigger of their own. Their manual gate is
+the Azure DevOps Environment approval/check, so a release run sets
+`enableDeployments=true` and the same run walks Test → UAT → Production, pausing
+at each gated Environment until an approver acts.
 
 The deployment stages are compile-time conditional on the
 `enableDeployments` queue-time parameter. When it is `false` (the default),
@@ -54,12 +70,15 @@ Two queue-time parameters control optional work:
 
 | Parameter | Default | Effect |
 |---|---|---|
-| `publishImages` | `false` | When true, the six images are built and pushed to Azure Container Registry with `Docker@2`. When false, they are built locally on the agent only. |
+| `publishImages` | `false` | When true, the six images are built and pushed to Azure Container Registry with `Docker@2`, their digests are resolved, and the promoted digests are scanned. When false, they are built locally on the agent and that local build is scanned. |
 | `enableDeployments` | `false` | When true, the Test, UAT, and Production stages are included. When false, they are omitted from the pipeline graph. |
 
 A normal pull-request run uses the defaults and needs no Azure resources.
-A release run sets both parameters to `true` after the targets have been
-configured.
+A release run sets **both** parameters to `true`: `publishImages` because the
+deployment stages consume the `image-digests` artefact, and
+`enableDeployments` because otherwise there is nothing to promote. Enabling
+deployments without a published `image-digests` artefact fails at the download
+step rather than deploying an unpublished build.
 
 ## Build stage
 
@@ -102,7 +121,14 @@ the `web/` directory.
 ### Compose validation
 
 The `ComposeValidation` job copies `.env.example` to `.env` and runs
-`docker compose config -q`. It needs Docker but no running services.
+`docker compose config -q`. It also validates the deployment assets, so a broken
+template or script fails in the Build stage rather than in the first deployment:
+
+- `az bicep install` followed by
+  `az bicep build --file infra/main.bicep --stdout > /dev/null`;
+- `bash -n` over every `tools/deploy/*.sh` and `web/nginx/*.sh` script.
+
+No Azure subscription is needed; Bicep compiles locally and `bash -n` only parses.
 
 ### Images
 
@@ -117,34 +143,46 @@ The `Images` job builds six images from the repository root:
 | issuer-mock | `tools/IssuerMock/Dockerfile` | `sme-demo/issuer-mock` |
 | migrator | `tools/Migrator/Dockerfile` | `sme-demo/migrator` |
 
-With `publishImages=true`, each image is pushed with two tags:
-
-- `$(Build.SourceVersion)` — the commit SHA, used for promotion and traceability
-- `$(Build.BuildId)` — the Azure Pipelines run id, convenient for humans
-
-The same commit-SHA tag is intended to be promoted through Test, UAT, and
-Production. Images must not be rebuilt per environment.
-
-With `publishImages=false` the job also scans what it built. It generates one
-CycloneDX SBOM per image, publishes them as the `sboms` pipeline artifact, and
-then runs the Trivy vulnerability gate on each image:
-
-- `--severity HIGH,CRITICAL` with `--ignore-unfixed` and `--exit-code 1`, so a
-  fixable high or critical finding fails the job;
-- a 15-minute per-image timeout;
-- each SBOM is generated before the gate, so a failed scan still leaves the
-  inventory behind.
-
-The scan steps are conditional on `publishImages=false` because `Docker@2`
-pushes without keeping local image tags on the agent; when images are pushed to
-ACR, the promoted digest should be scanned by the registry-side gate instead.
-Trivy is pinned and checksum-verified like gitleaks:
+Trivy is installed in both modes, pinned and checksum-verified like gitleaks:
 
 | Variable | Value |
 |---|---|
 | `trivyVersion` | `0.76.2` |
 | `trivySha256` | `bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf` |
 | Linux x64 asset | `https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz` |
+
+**With `publishImages=true`**, each image is pushed with two tags:
+
+- `$(Build.SourceVersion)` — the commit SHA, used for promotion and traceability
+- `$(Build.BuildId)` — the Azure Pipelines run id, convenient for humans
+
+After the six pushes, an `AzureCLI@2` step logs in with the ARM service
+connection, runs `az acr login --name "$(acrName)"`, and calls
+[`tools/deploy/resolve-digests.sh`](../tools/deploy/resolve-digests.sh) with
+`--acr "$(acrName)" --tag "$(imageTag)"`. That script asks
+`az acr repository show-manifests` for each repository and writes
+`{"registry": "...", "tag": "...", "images": {"api": "...@sha256:...", ...}}`.
+The directory is published as the `image-digests` pipeline artefact. Every
+deployment stage downloads that artefact; none of them rebuilds or resolves a
+tag again. Tags are for humans; the digest is the deployment contract.
+
+The same job then generates one CycloneDX SBOM per **digest** and publishes them
+as the `sboms` artefact, and runs the Trivy gate against each digest reference.
+The registry credential from `az acr login` is still in the job's Docker config,
+so Trivy pulls the promoted digests directly. The flags are the same as the
+local path:
+
+- `--severity HIGH,CRITICAL` with `--ignore-unfixed` and `--exit-code 1`, so a
+  fixable high or critical finding fails the job before any environment can
+  consume the digest;
+- a 15-minute per-image timeout;
+- each SBOM is generated before the gate, so a failed scan still leaves the
+  inventory behind.
+
+**With `publishImages=false`**, the job builds the same six images locally,
+generates one CycloneDX SBOM per image, publishes them as `sboms`, and runs the
+same Trivy gate against the local tags. That path proves the Dockerfiles and the
+running image inventory on every pull request; it does not publish anything.
 
 All six images currently scan clean locally under the same Trivy version and
 flags. The repository uses Docker Official and Microsoft .NET 10 base images,
@@ -201,81 +239,258 @@ while patch and digest updates inside the current major are still proposed.
 
 The three deployment stages use Azure DevOps Environments:
 
-| Stage | Environment | Intended gate |
+| Stage | Environment | Gate |
 |---|---|---|
 | Deploy Test | `sme-demo-test` | automatic after a successful Build |
-| Deploy UAT | `sme-demo-uat` | optional approval/check on the environment |
-| Deploy Production | `sme-demo-prod` | required approval/check; may also use business-hours or exclusive-lock checks |
+| Deploy UAT | `sme-demo-uat` | Environment approval/check; a human starts it |
+| Deploy Production | `sme-demo-prod` | Environment approval/check, plus the business change ticket recorded in the run |
 
-Each stage is a `deployment` job with a `runOnce` strategy. The environment
-approval is configured in Azure DevOps, not in YAML, so changing an approver
-does not require a pipeline change.
+Each stage is a `deployment` job with a `runOnce` strategy, `ubuntu-latest`, a
+60-minute timeout, and a checkout of the repository. UAT and Production have no
+queue-time trigger of their own: the Environment approval is configured in Azure
+DevOps, not in YAML, so changing an approver does not require a pipeline change,
+and a release run moves through all three stages in order.
 
-### Placeholder behaviour
+Each job:
 
-The deploy steps currently:
+1. binds its own variable group (`vg-sme-demo-test`, `-uat`, `-prod`) so the
+   target resource group and credentials differ per stage;
+2. downloads the `image-digests` artefact from the same run — no stage rebuilds
+   or re-resolves a tag;
+3. runs `bash tools/deploy/deploy.sh` under `AzureCLI@2` with
+   `addSpnToEnvironment: true`, passing `ENVIRONMENT_NAME`, `RESOURCE_GROUP`,
+   `LOCATION`, `ACR_NAME`, `NAME_PREFIX`, `IMAGES_JSON`, `SOURCE_COMMIT`,
+   `DEPLOYMENT_RECORD_FILE`, the SQL and application-database credentials, the
+   issuer key, and the demo values as environment variables;
+4. attempts to publish the deployment record as `deployment-record-<env>` even
+   when the deployment failed (`condition: succeededOrFailed()`), so a run that
+   wrote the record before failing still leaves the attempted digests visible.
 
-1. validate `acrLoginServer`, `azureServiceConnection`, and the matching
-   `testResourceGroup` / `uatResourceGroup` / `prodResourceGroup` variable
-2. print the target environment, resource group, and image reference
-3. emit a `##vso[task.logissue type=error]` message
-4. exit 1
+### What a deployment does
 
-This is intentional. Enabling deployments before the real steps exist must
-fail, not silently report a release.
+[`tools/deploy/deploy.sh`](../tools/deploy/deploy.sh) performs the same sequence
+in every environment:
 
-### What the real steps should do
+1. **Validate.** It requires `ENVIRONMENT_NAME` (`test`, `uat`, or `prod`),
+   `RESOURCE_GROUP`, `LOCATION`, `ACR_NAME`, `IMAGES_JSON`, the SQL admin and
+   application-database passwords, `ORG_ID`, `DEMO_MODE`, the demo credentials,
+   and `ISSUER_API_KEY`. It reads `images.json`, requires every one of the six
+   references to be pinned by `@sha256:`, and refuses to run when the registry is
+   not in the target resource group.
+2. **Deploy the template.** `az deployment group create` applies
+   [`infra/main.bicep`](../infra/main.bicep) with the six digests, the SQL
+   credentials, the issuer key, and the demo parameters. The template creates
+   the Log Analytics workspace, Container Apps environment, storage account
+   (Blob `card-art`, table `transactions`, Files share `auth-keys`), Azure SQL
+   (`sme_api`, `sme_auth`), Key Vault (ten secrets), one user-assigned managed
+   identity, five Container Apps, and three Container Apps Jobs.
+3. **Run the one-shot jobs in order**:
+   `<prefix>-<env>-job-db-grants` (server logins on `master`) →
+   `-job-migrate-api` (API schema, then the `sme_api_app` user) →
+   `-job-migrate-auth` (auth schema, then the `sme_auth_app` user). It starts
+   each with `az containerapp job start`, polls the execution status, and fails
+   on `Failed`, `Canceled`, or timeout with the exact
+   `az containerapp job logs show` command to inspect it. Jobs do not retry
+   themselves; the SQL is idempotent, so a fixed job is restarted, not re-run
+   blind.
+4. **Wait for revisions.** It restarts each app's latest revision after the jobs,
+   so an app that started before its schema existed is not left in backoff, then
+   waits for `web`, `auth`, `api`, `sms-mock`, and `issuer-mock` until
+   `latestRevisionName` equals `latestReadyRevisionName` and `runningStatus` is
+   `Running`. It does not call `/readyz` itself: internal ingress is unreachable
+   from the agent, and the platform probes own container health.
+5. **Record.** It prints and optionally writes a JSON deployment record with the
+   environment, deployment name, resource group, public web URL, tag, commit,
+   timestamp, and the six digest references. No password or connection string
+   appears in it.
+6. **Smoke the public path.** It exports `WEB_BASE_URL` from the template output
+   and executes
+   [`tools/deploy/environment-smoke.sh`](../tools/deploy/environment-smoke.sh)
+   against the public web origin. Set `SKIP_SMOKE=true` only to recover an
+   environment whose smoke is known to fail for an unrelated reason.
 
-Replace each placeholder with the same three logical operations, in this
-order:
+The environment smoke test checks, through the web origin only:
 
-1. **Migrate** — run `sme-demo/migrator` (or an equivalent job) against the
-   environment database, using a Key Vault-backed connection string. Apply the
-   idempotent scripts before rolling out the application.
-2. **Roll out** — deploy the image tag produced by the Build stage. Use the
-   same digest/tag for every environment; do not rebuild during deployment.
-3. **Smoke** — check auth's `/healthz` and the API's `/readyz`, then call the
-   environment's auth and API URLs with the same contract as
-   `compose-smoke.sh` and any environment-specific checks.
+- `GET /` returns 200 HTML;
+- `GET /config.js` returns 200 with `Cache-Control: no-store`;
+- `POST /auth/login` returns 200 with a `challenge_id`;
+- `POST /auth/challenges/<id>/verify` returns 200 with an `access_token`;
+- `GET /api/v1/me` returns 200, `org` equal to `ORG_ID` (`sme`), and a non-empty
+  `name`;
+- anonymous `GET /api/v1/me` returns 401 with `error.code=UNAUTHENTICATED`.
 
-The rollout task depends on the hosting model:
+### Container Apps mapping
 
-| Hosting | Candidate tasks / commands |
+| Compose service | Container Apps resource |
 |---|---|
-| AKS | `KubernetesManifest@1` or `kubectl`; migrations as a Kubernetes Job |
-| App Service | `AzureWebApp@1` / `AzureRmWebAppDeployment@4`; migrations via a container job or SQL step |
-| Container Apps | `AzureCLI@2` with `az containerapp update --image`; migrations via a container job |
+| `web` (nginx + SPA) | Container App, **external** ingress on 8080 |
+| `auth` | Container App, **internal** ingress on 8081 |
+| `api` | Container App, **internal** ingress on 8082 |
+| `sms-mock` | Container App, internal ingress on 8083 |
+| `issuer-mock` | Container App, internal ingress on 8084 |
+| `db-migrator`, `db-migrator-auth`, `db-grants` | three Container Apps **Jobs** from the same migrator image |
+| `mssql` | **Azure SQL** databases `sme_api` and `sme_auth` |
+| `azurite` | **Azure Storage**: Blob container `card-art`, table `transactions` |
+| `auth-keys` volume | **Azure Files** share `auth-keys`, mounted read-write at `/keys` on `auth` |
 
-The hosting model is not yet chosen, which is why these stages are
-placeholders.
+### Naming
+
+| Object | Pattern | Example (Test) |
+|---|---|---|
+| Container App | `<namePrefix>-<env>-<service>` | `smedemo-test-web` |
+| Container Apps Job | `<namePrefix>-<env>-job-<purpose>` | `smedemo-test-job-migrate-api` |
+| Container Apps environment | `<namePrefix>-<env>-env` | `smedemo-test-env` |
+| Resource group | created once by the operator | `rg-sme-demo-test` |
+| Azure Container Registry | created once by the operator | `acrsmedemotest` |
+
+`namePrefix` defaults to `smedemo` and is capped at 10 characters by the
+template, because `-job-migrate-auth` and a four-character environment name must
+still fit the 32-character Container App limit. The Log Analytics workspace, Key
+Vault, SQL server, and storage account names are derived by the template from
+the prefix, the environment, and a resource-group hash; `deploy.sh` prints the
+SQL FQDN, and the template outputs expose the Key Vault and environment names.
+
+### Probes
+
+The platform probes replace the Compose in-image `HealthProbe`; the .NET runtime
+images have no shell or `curl`.
+
+| App | Ingress | Port | Probe path | Kind |
+|---|---|---|---|---|
+| `web` | external | 8080 | `/` | Liveness |
+| `auth` | internal | 8081 | `/healthz` | Readiness and Liveness |
+| `api` | internal | 8082 | `/readyz` (readiness), `/healthz` (liveness) | Readiness and Liveness |
+| `sms-mock` | internal | 8083 | `/healthz` | Liveness |
+| `issuer-mock` | internal | 8084 | `/healthz` | Liveness |
+
+`api` readiness checks SQL, Blob Storage, and auth metadata; `auth` and the mocks
+are live as soon as the process answers. All five apps run with one replica
+until a shared rate limiter and shared readiness source exist (ADR-017).
+
+### Rollback
+
+[`tools/deploy/rollback.sh`](../tools/deploy/rollback.sh) moves an environment
+back to the previous Container App revision:
+
+```bash
+tools/deploy/rollback.sh --environment test --resource-group rg-sme-demo-test
+```
+
+It lists revisions by creation time, activates the one before the newest, and
+moves 100% of ingress traffic to it; `--app` limits the work to one app. This is
+an application rollback only. Database migrations are forward-only (ADR-010):
+the schema stays on the newer version, so the previous revision must still
+tolerate it. If it does not, roll forward with a fixed image instead. Auth
+signing keys stay on the `auth-keys` Azure Files share, so rolling `auth` back
+does not invalidate tokens.
 
 ## Required Azure DevOps configuration
 
-Before setting `enableDeployments=true`, configure:
+This is a one-time bootstrap, in order. It cannot be stored in Git because it
+creates the subscription-level objects the pipeline depends on. The names below
+are the ones the pipeline expects; substitute your own only if you also change
+the matching variable.
 
-1. **Environments**
-   - `sme-demo-test`
-   - `sme-demo-uat` with an approval/check
-   - `sme-demo-prod` with an approval/check
+### 1. Subscription, resource groups, and registry
 
-2. **Service connections**
-   - a Docker registry service connection for the ACR
-   - an Azure Resource Manager service connection for the target subscription
+- One resource group per environment, for example `rg-sme-demo-test`,
+  `rg-sme-demo-uat`, and `rg-sme-demo-prod`, in the region set by `location`
+  (`australiaeast` by default). Confirm the region before creating anything.
+- An Azure Container Registry holding the six `sme-demo/*` repositories. The
+  single-file template creates the `AcrPull` role assignment at the registry
+  scope, so **the registry must be in the same resource group as the
+  deployment**; `deploy.sh` checks this before doing anything and fails with an
+  explanation if it is not. The registry name goes in `acrName`; the login
+  server for image references comes from the `image-digests` artefact, so there
+  is no separate variable to keep in step.
 
-3. **Pipeline variables** (directly or via a variable group linked to Key Vault)
+Every stage deploys the references in `images.json` unchanged, so all stages use
+the registry that the Build stage pushed to. A separate registry per environment
+would require the promoted digests to exist there and a rewrite step that this
+repository does not implement; `deploy.sh` rejects an `images.json` whose `api`
+reference is not from the expected registry rather than deploy the wrong image.
 
-| Variable | Purpose |
-|---|---|
-| `acrLoginServer` | ACR login server used in deployment image references |
-| `acrServiceConnection` | Docker registry service connection name |
-| `azureServiceConnection` | Azure Resource Manager service connection name |
-| `testResourceGroup` | target resource group for Test |
-| `uatResourceGroup` | target resource group for UAT |
-| `prodResourceGroup` | target resource group for Production |
+### 2. Service connections
 
-Database passwords, JWT signing material, and other credentials belong in
-Azure Key Vault or secret variables. They must not appear in this YAML or in
-committed `.env` files.
+- **Azure Resource Manager** (`azureServiceConnection`): authorised to deploy to
+  every target resource group. ADR-020 names it `sc-sme-demo-azure`.
+- **Docker registry** (`acrServiceConnection`): authorised to push to the six
+  `sme-demo/*` repositories, used by `Docker@2`. ADR-020 names it
+  `sc-sme-demo-acr`.
+
+The principal behind the ARM connection also needs, on the target ACR, `AcrPush`
+(for `az acr login` and the digest-bearing scan) and `AcrPull` (for
+`az acr repository show-manifests`). `Docker@2` pushes with the separate Docker
+registry service connection, not with this principal.
+
+### 3. Environments and approvals
+
+- `sme-demo-test` — no approval; Test deploys automatically after a green Build.
+- `sme-demo-uat` — an approval/check. This is the manual gate; there is no
+  separate queue-time trigger.
+- `sme-demo-prod` — an approval/check, plus the business change ticket recorded
+  in the run. Business-hours or exclusive-lock checks are optional additions.
+
+### 4. Variable groups
+
+Create `vg-sme-demo-test`, `vg-sme-demo-uat`, and `vg-sme-demo-prod`, and link
+each to the matching pipeline stage. The pipeline reads these exact names:
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `sqlAdminPassword` | yes, secret | SQL Server administrator password; used by the migrator and bootstrap jobs only |
+| `SME_API_DB_PASSWORD` | yes, secret | password for the `sme_api_app` login |
+| `SME_AUTH_DB_PASSWORD` | yes, secret | password for the `sme_auth_app` login |
+| `ISSUER_API_KEY` | yes, secret | shared key for `issuer-mock` |
+| `testResourceGroup` / `uatResourceGroup` / `prodResourceGroup` | optional | override the pipeline default for that stage |
+| `acrName` | optional | override the registry for that stage (see the single-registry caveat above) |
+| `location` | optional | override the region for that stage |
+| `namePrefix` | optional | override the resource-name prefix (10 characters maximum) |
+| `azureServiceConnection` | optional | override the ARM connection for that stage |
+
+Mark `sqlAdminPassword`, `SME_API_DB_PASSWORD`, `SME_AUTH_DB_PASSWORD`, and
+`ISSUER_API_KEY` as secret variables. Link the group to Key Vault if the
+organisation requires secret values to live there. None of these values may be
+committed to this YAML or to `.env.example`; the pipeline-level demo values are
+published by design and are not secrets.
+
+The three database passwords are substituted into a T-SQL literal and into a
+SqlClient connection string, so they must not contain a quote, semicolon,
+backslash, backtick, or whitespace. `deploy.sh` rejects such a value before it
+starts; generate them from a safe alphabet. Azure SQL's complexity rule is still
+satisfiable without those characters.
+
+The pipeline-level variables an operator normally adjusts are `acrName`,
+`acrServiceConnection`, `azureServiceConnection`, `location`,
+`sqlAdminLogin`, the three resource groups, and `namePrefix`. The demo
+credentials (`orgId`, `demoMode`, `demoUsername`, `demoPassword`, `demoOtp`) are
+published values; replace them and set `demoMode=false` for a non-demo
+deployment.
+
+### 5. Permissions of the deploying principal
+
+The identity that runs the ARM deployment (the service-connection principal)
+must be able to:
+
+- create and update every resource in the target resource group (`Contributor`
+  or a custom role with the resource-provider write actions);
+- create role assignments — `Microsoft.Authorization/*/write` — because the
+  template grants `AcrPull` to the managed identity at the registry scope and
+  `Key Vault Secrets User` at the vault scope (`Owner` or `User Access
+  Administrator` at the target scopes);
+- write secret values — **Key Vault Secrets Officer** on each environment's
+  vault, because the deployment creates the ten secrets. The first run creates
+  the vault itself, so grant the role at the resource-group scope, or grant it
+  on the new vault and redeploy once;
+- read the Log Analytics shared key — the
+  `Microsoft.OperationalInsights/workspaces/sharedKeys/action` permission, which
+  is included in Log Analytics Contributor, because the Container Apps
+  environment consumes `listKeys().primarySharedKey`.
+
+Role assignments and Key Vault data-plane permissions can take several minutes
+to propagate. If the first run fails while creating a revision or writing a
+secret, re-run the deployment once propagation has completed; the template is
+idempotent, so a redeploy does not create duplicates.
 
 ## Source repository
 
@@ -292,8 +507,8 @@ Both pipelines run the same build gates during the transition:
 | Concern | GitHub Actions | Azure Pipelines |
 |---|---|---|
 | PR feedback | `.github/workflows/ci.yml` | `Build` stage |
-| Release/deployment | not present | Test/UAT/Prod stages |
-| Image publication | local build only | optional ACR push via `publishImages` |
+| Release/deployment | not present | Test/UAT/Prod stages calling `tools/deploy/deploy.sh` |
+| Image publication | local build only | ACR push plus digest resolution via `publishImages` |
 | Environment approvals | not present | Azure DevOps Environments |
 | Secrets | GitHub secrets | variable groups / Key Vault |
 
@@ -322,6 +537,10 @@ tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
 /tmp/gitleaks detect --source . --redact --config .gitleaks.toml --exit-code 1
 
 docker compose config -q
+az bicep install
+az bicep build --file infra/main.bicep --stdout > /dev/null
+for script in tools/deploy/*.sh web/nginx/*.sh; do bash -n "$script"; done
+
 docker compose up -d --build mssql azurite db-migrator db-migrator-auth \
   db-grants auth api
 bash tools/smoke/compose-smoke.sh
@@ -340,6 +559,14 @@ timings with warm base images:
 - teardown: 17 s
 - vulnerability scan of 17 projects: 77 s
 - full-history gitleaks scan: 7 s
+
+The Bicep build and the `bash -n` checks validate the deployment assets without
+a subscription. What cannot be reproduced locally is everything that needs
+Azure: `resolve-digests.sh` (ACR manifest lookup), `deploy.sh` (resource
+deployment, Container Apps Jobs, revision readiness), `environment-smoke.sh`
+against a public Container Apps origin, and `rollback.sh` (revision activation
+and traffic weights). Those require a logged-in `az` session and a prepared
+resource group; they are not simulated in CI.
 
 Cold GitHub or Azure agents will be slower because base images and NuGet
 packages are not cached.
@@ -362,14 +589,15 @@ packages are not cached.
   pipeline checks out with `fetchDepth: 0` so the scan covers every commit.
   `.gitleaks.toml` allowlists the documented Azurite emulator key and generated
   build output; it does not disable the default rule set.
-- **Images** are scanned with Trivy 0.76.2 when they are built locally
-  (`publishImages=false`), also pinned and checksum-verified. Fixable `HIGH` and
-  `CRITICAL` findings fail the build; `--ignore-unfixed` also filters unfixed
-  findings out of the output, so this gate is not their inventory. A CycloneDX
-  SBOM is generated for every image and published as the `sboms` artifact before
-  the gate runs. When images are pushed to ACR, these
-  local scan steps do not run; the promoted digest still needs a registry-side
-  scan.
+- **Images** are scanned with Trivy 0.76.2 in both modes, pinned and
+  checksum-verified. When the images are built locally (`publishImages=false`),
+  the scan runs against the local tags. When they are pushed
+  (`publishImages=true`), the tag is resolved to six digests and the scan runs
+  against those **promoted digest references**, using the Docker credential that
+  `az acr login` left in the job. Fixable `HIGH` and `CRITICAL` findings fail
+  the build; `--ignore-unfixed` also filters unfixed findings out of the output,
+  so this gate is not their inventory. A CycloneDX SBOM is generated for every
+  image or digest and published as the `sboms` artifact before the gate runs.
 - **Supply chain pinning** has two layers. The .NET SDK is pinned in
   `global.json` (`10.0.404`, `latestFeature`, no prereleases) for the GitHub
   workflow and repeated as `dotnetVersion` here; every base image is pinned by
@@ -424,7 +652,7 @@ images, all pinned by tag and digest:
 |---|---|---|
 | api, auth, sms-mock, issuer-mock | `mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra` | no shell, package manager, or `curl`; runs as UID 1654 (`$APP_UID`); the Compose healthcheck is the in-image `dotnet /healthprobe/SmeDemo.HealthProbe.dll` probe; Compose adds a read-only root, dropped capabilities, `no-new-privileges`, a 64 MiB `/tmp`, and limits |
 | migrator | `mcr.microsoft.com/dotnet/runtime:10.0-noble-chiseled-extra` | no shell or package manager; no healthcheck; one-shot process; same Compose hardening and limits |
-| web | `nginx:1.31-alpine` | runs as the unprivileged `nginx` user on port 8080; `nginx-module-xslt` and `libxslt` are removed; still ships a shell and uses `wget` in the healthcheck; same hardening and limits |
+| web | `nginx:1.31-alpine` | runs as the unprivileged `nginx` user on port 8080; `nginx-module-xslt` and `libxslt` are removed; the server block is rendered at container start from `UPSTREAM_AUTH`, `UPSTREAM_API`, and `NGINX_RESOLVER` into `/tmp/conf.d/default.conf`; still ships a shell and uses `wget` in the healthcheck; same hardening and limits |
 | mssql, db-grants | `mcr.microsoft.com/mssql/server:2022-latest` | digest-pinned; mssql keeps `no-new-privileges` and CPU/memory limits only because its entrypoint must prepare the data volume; db-grants keeps the same two controls |
 | azurite | `mcr.microsoft.com/azure-storage/azurite` | digest-pinned; same Compose hardening and limits as the application services |
 | build stages only | `mcr.microsoft.com/dotnet/sdk:10.0`, `node:22-bookworm-slim` | not part of the runtime attack surface |
@@ -486,12 +714,13 @@ closed for the .NET services, but the platform and web image still need work:
    in-image .NET probe replaces `curl`; the images have no `/bin/sh`. **Open for
    `web`:** nginx still needs a shell and `wget`, so removing them requires a
    shell-free web image or an external probe for that one service.
-4. **Done in Compose and the .NET images, open on the platform.** The .NET
-   services and nginx run as non-root, and the CLI stack uses a read-only root
-   filesystem, `no-new-privileges`, and dropped capabilities. A deployment must
-   still reproduce the same security context in its pod or container definition,
-   and orchestrator probes should call the HTTP endpoints directly instead of
-   exec-ing the in-image probe.
+4. **Done in Compose and the .NET images, partly done on the platform.** The
+   .NET services and nginx run as non-root, and the CLI stack uses a read-only
+   root filesystem, `no-new-privileges`, and dropped capabilities. The Container
+   Apps template relies on the image's non-root user and platform isolation; it
+   does not yet express a read-only root filesystem or capability drops in the
+   container definition. The platform probes call the HTTP endpoints directly
+   instead of exec-ing the in-image probe.
 5. **Done — digest pinning, image scanning, and SBOMs.** Base images are pinned
    by tag and digest, Dependabot updates them weekly, and CI scans the built
    images and publishes CycloneDX SBOMs. Provenance/SLSA attestation remains
@@ -512,16 +741,48 @@ image contents and runtime configuration, not of its name.
 | `check-vulnerabilities.py` fails with a restore error | The script uses `--no-restore`; run the Release build first so `obj/project.assets.json` exists. |
 | gitleaks reports the Azurite key | The well-known emulator key is allowlisted by `.gitleaks.toml`. Any other finding should be treated as real. |
 | Compose smoke times out on a cold agent | SQL Server and Azurite startup dominates. The wait loop allows 180 seconds and the job allows 45 minutes. |
-| Deployment stage fails immediately | The placeholder is still present, or `acrLoginServer` / `azureServiceConnection` / `*ResourceGroup` is unset. This is intentional until the real deployment is implemented. |
-| ACR push fails | Check the Docker registry service connection and `acrServiceConnection`; the ACR must exist and the connection must be authorised. |
+| ACR push or digest resolution fails | Check the Docker registry service connection (`acrServiceConnection`) and the ARM connection (`azureServiceConnection`); the ACR must exist and both principals need `AcrPush`, with `AcrPull` for `show-manifests`. The tag must have been pushed by the same run. |
+| Deployment stage fails before any Azure call | `enableDeployments=true` but `publishImages=false`, so the `image-digests` artefact does not exist; the download step fails. Set both parameters for a release run. |
+| Deployment fails because the ACR is not in the target resource group | `deploy.sh` refuses to run by design: the single-file template can only create the `AcrPull` role assignment when the registry and the deployment share a resource group. Move the registry or change the target group. |
+| A new revision cannot pull the image | `AcrPull` on the user-assigned identity was just created and has not propagated, or the digest is not in that registry. Re-run the deployment after a few minutes; confirm the digest exists with `az acr repository show-manifests`. |
+| `auth` cannot write `/keys` | The Azure Files share is mounted but not writable by the non-root auth user. Check `az containerapp logs show --name <prefix>-<env>-auth --resource-group <rg> --tail 100`. The ADR-020 fallback is a single auth replica with no mount, accepting token reset per revision. |
+| A migrator job fails | Inspect the execution with `az containerapp job logs show --name <prefix>-<env>-job-migrate-api --resource-group <rg> --execution <id> --container migrator`. The SQL is idempotent; fix the cause and restart the job. |
+| A Container App never becomes ready | Check `az containerapp revision list --name <app> --resource-group <rg> -o table` and `az containerapp logs show --name <app> --resource-group <rg> --tail 100`. Internal ingress means the agent cannot call `/readyz`; the revision state and the platform probe reason are the evidence. |
+| Bicep validation fails on a local shell | `az bicep install` then `az bicep build --file infra/main.bicep --stdout` reproduces it; the Build stage runs the same two commands. |
 
-## Current open decisions
+## Decisions and remaining gaps
 
-1. Hosting model: AKS, App Service, or Container Apps.
-2. Whether Test deploys automatically on every successful `main` build and
-   whether UAT is automatic or manual.
-3. Whether Production uses only Environment approval or also a change ticket /
-   business-hours check.
-4. Whether the source stays on GitHub or moves to Azure Repos.
-5. When to reduce or retire the GitHub Actions workflow after Azure Pipelines
-   becomes the release source of truth.
+Decisions 1–5 of the previous version are resolved by
+[ADR-020](reference/adr/ADR-020-azure-hosting-and-test-deployment.md):
+
+1. Hosting is Azure Container Apps with Azure SQL, Blob/Table Storage, Azure
+   Files, Key Vault, and a managed identity.
+2. Test deploys automatically after a green `main` build when
+   `enableDeployments=true`; UAT is manual through the `sme-demo-uat`
+   Environment approval.
+3. Production uses the `sme-demo-prod` Environment approval plus the business
+   change ticket recorded in the run.
+4. The code stays on GitHub; only the trigger configuration changes if it moves.
+5. GitHub Actions stays the PR gate. Reducing or retiring it is a later
+   decision after the Azure line has run green for several releases.
+
+The remaining work is production hardening, not a decision about this
+implementation:
+
+1. **Private networking.** The demo has no VNet integration or private
+   endpoints; Azure SQL has the `0.0.0.0` "Allow Azure services" rule, and Key
+   Vault and Storage have public endpoints. A production landing needs a VNet,
+   private DNS, private endpoints, and removal of the public SQL rule.
+2. **High availability and backups.** One replica per service, one SQL database
+   per app, no zone redundancy, no autoscaling, and no tested backup/restore.
+   Production needs multi-replica-safe state (see 4), managed backups with
+   point-in-time recovery, an RPO/RTO, and a restore exercise.
+3. **DHI and the web shell.** The .NET images are chiseled; `web` still ships a
+   shell and `wget`, and the nginx entrypoint renders its configuration at
+   start. Removing them requires a shell-free web image or an external probe.
+4. **Shared rate limiter.** ADR-017's limits, challenge store, and readiness
+   cache are per process, which is why every app runs one replica. A shared
+   limiter and shared readiness source are prerequisites for scaling.
+5. **Deprecation headers.** ADR-012 keeps `/api/v1` with a documented
+   deprecation window but no `Deprecation`/`Sunset` headers are emitted yet;
+   add them before the first API version transition.

@@ -1,12 +1,14 @@
-﻿using Microsoft.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 
 namespace SmeDemo.Migrator;
 
 /// <summary>
 /// Applies the committed, idempotent schema scripts to a database. It waits for
 /// SQL Server, creates the database when missing, then runs each script batch by
-/// batch. The generated scripts manage their own transactions; this tool only
-/// guarantees that a failure stops everything and is reported as a non-zero exit.
+/// batch. An optional bootstrap script runs afterwards on the same connection,
+/// with <c>${NAME}</c> tokens expanded from the environment. The generated
+/// scripts manage their own transactions; this tool only guarantees that a
+/// failure stops everything and is reported as a non-zero exit.
 /// </summary>
 internal static class MigratorRunner
 {
@@ -18,6 +20,25 @@ internal static class MigratorRunner
         Console.WriteLine($"[migrator] database={settings.DatabaseName}");
         Console.WriteLine($"[migrator] scripts={settings.MigrationsPath}");
 
+        string? bootstrapSql = null;
+        if (settings.BootstrapSqlPath is { } bootstrapPath)
+        {
+            // Fail before waiting on SQL Server or applying migrations: a
+            // missing file or variable is a deployment configuration error, not
+            // a transient database problem, and must not leave a half-applied
+            // change behind.
+            if (!File.Exists(bootstrapPath))
+            {
+                throw new FileNotFoundException(
+                    $"BOOTSTRAP_SQL file not found: {bootstrapPath}",
+                    bootstrapPath);
+            }
+
+            var template = await File.ReadAllTextAsync(bootstrapPath);
+            bootstrapSql = SqlVariableSubstitution.SubstituteFromEnvironment(template);
+            Console.WriteLine($"[migrator] bootstrap={bootstrapPath}");
+        }
+
         await WaitForServerAsync(settings);
         await EnsureDatabaseAsync(settings);
         await WaitForDatabaseAsync(settings);
@@ -28,16 +49,29 @@ internal static class MigratorRunner
 
         if (scripts.Length == 0)
         {
-            Console.WriteLine("[migrator] no scripts found; nothing to do.");
-            return 0;
-        }
+            if (bootstrapSql is null)
+            {
+                Console.WriteLine("[migrator] no scripts found; nothing to do.");
+                return 0;
+            }
 
-        foreach (var script in scripts)
+            Console.WriteLine("[migrator] no scripts found.");
+        }
+        else
         {
-            await ApplyScriptAsync(settings, script);
+            foreach (var script in scripts)
+            {
+                await ApplyScriptAsync(settings, script);
+            }
+
+            Console.WriteLine($"[migrator] applied {scripts.Length} script(s).");
         }
 
-        Console.WriteLine($"[migrator] applied {scripts.Length} script(s).");
+        if (bootstrapSql is not null)
+        {
+            await ApplyBootstrapAsync(settings, bootstrapSql);
+        }
+
         return 0;
     }
 
@@ -145,6 +179,23 @@ internal static class MigratorRunner
         var batches = SqlScript.SplitBatches(sql);
         Console.WriteLine($"[migrator] applying {Path.GetFileName(scriptPath)} ({batches.Count} batch(es))");
 
+        await ExecuteBatchesAsync(settings, batches);
+
+        Console.WriteLine($"[migrator] applied {Path.GetFileName(scriptPath)}.");
+    }
+
+    private static async Task ApplyBootstrapAsync(MigratorSettings settings, string sql)
+    {
+        var batches = SqlScript.SplitBatches(sql);
+
+        await ExecuteBatchesAsync(settings, batches);
+
+        // The expanded SQL is never logged: it contains the application passwords.
+        Console.WriteLine($"[migrator] applied bootstrap ({batches.Count} batch(es)).");
+    }
+
+    private static async Task ExecuteBatchesAsync(MigratorSettings settings, IReadOnlyList<string> batches)
+    {
         await using var connection = new SqlConnection(settings.ConnectionString);
         await connection.OpenAsync();
 
@@ -163,7 +214,5 @@ internal static class MigratorRunner
             command.CommandTimeout = 300;
             await command.ExecuteNonQueryAsync();
         }
-
-        Console.WriteLine($"[migrator] applied {Path.GetFileName(scriptPath)}.");
     }
 }

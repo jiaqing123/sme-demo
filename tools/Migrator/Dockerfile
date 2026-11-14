@@ -21,6 +21,7 @@ WORKDIR /app
 
 COPY --from=build /out ./
 COPY db/migrations ./migrations
+COPY db/bootstrap ./bootstrap
 
 USER $APP_UID
 ENTRYPOINT ["dotnet", "SmeDemo.Migrator.dll"]

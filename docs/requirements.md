@@ -1023,6 +1023,13 @@ the demo earns a server, the split applies unchanged: a small
 `sme-demo-deploy` repository holding the compose file or Helm values, and a
 pipeline that applies it on merge.
 
+> **Superseded in part by ADR-020.** The demo has since been given an Azure
+> landing (Container Apps, Azure SQL, Blob/Table Storage, Key Vault) delivered by
+> `azure-pipelines.yml` and `infra/main.bicep`. Compose remains the local and
+> development deployment unit, and the deployment repository is still the same
+> repository. This section's baseline is kept as written; ADR-020 is the current
+> decision.
+
 
 ## 11. Security
 

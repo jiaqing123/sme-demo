@@ -1,20 +1,23 @@
 # Operational Runbook
 
-How to diagnose and recover the Compose demo, and what a real deployment has to
-replace. The build-and-run workflow is in [`development.md`](development.md); this
-file is the incident and operations view. Telemetry is described in
+How to diagnose and recover the Compose demo and the Azure Container Apps
+deployment. The build-and-run workflow is in [`development.md`](development.md);
+this file is the incident and operations view. Telemetry is described in
 [`observability.md`](observability.md), the release gates in
 [`azure-pipelines.md`](azure-pipelines.md), and the accepted decisions in
-[ADR-017](reference/adr/ADR-017-per-instance-rate-limiting-and-readiness.md) and
-[ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md).
+[ADR-017](reference/adr/ADR-017-per-instance-rate-limiting-and-readiness.md),
+[ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md), and
+[ADR-020](reference/adr/ADR-020-azure-hosting-and-test-deployment.md).
 
 ## 1. Purpose and scope
 
-The demo is one Compose project named `sme-demo` on one machine: nginx and the
-React SPA on 8080, `auth` on 8081, `api` on 8082, `sms-mock` on 8083,
-`issuer-mock` on 8084, and SQL Server, Azurite, two one-shot migrators, and
-`db-grants` on the internal `sme` network. Published ports bind to `127.0.0.1`
-only.
+The demo runs in one of two forms. Locally it is one Compose project named
+`sme-demo` on one machine: nginx and the React SPA on 8080, `auth` on 8081,
+`api` on 8082, `sms-mock` on 8083, `issuer-mock` on 8084, and SQL Server,
+Azurite, two one-shot migrators, and `db-grants` on the internal `sme` network.
+Published ports bind to `127.0.0.1` only. The Azure form is described in §9: the
+same images with Container Apps platform probes, Azure SQL, Azure Storage, and
+Key Vault. The Compose playbooks in this document still apply to local work.
 
 What this demo is:
 
@@ -22,22 +25,28 @@ What this demo is:
   rate limits, request correlation, opt-in telemetry, pinned images, and a
   hardened Compose runtime;
 - disposable by design: SQL Server, Azurite, and the auth signing keys all live
-  on named volumes that can be removed and recreated;
-- offline: no registry, IdP, SMS gateway, or telemetry collector is required
-  after the images are built.
+  on named volumes that can be removed and recreated (Azure uses managed
+  services and the `auth-keys` file share instead);
+- offline in Compose: no registry, IdP, SMS gateway, or telemetry collector is
+  required after the images are built.
 
 What this demo is not:
 
-- highly available: there is one replica of each service and one host;
-- durable: there is no backup service and no restore procedure for SQL Server;
-- internet-facing: TLS, a real identity provider, a real SMS gateway, and a
-  managed secret store are all out of scope;
+- highly available: there is one replica of each service, one Compose host, and
+  one Container Apps replica per service;
+- durable: there is no backup service and no restore procedure for SQL Server or
+  Azure SQL;
+- internet-facing without preparation: the Compose stack is loopback-only; the
+  Azure Test environment exposes the web origin over HTTPS, but still with the
+  published demo credentials and demo mode. There is no WAF, no custom domain,
+  and no real identity provider;
 - a complete observability stack: there is no collector, no sampling policy,
-  and no central log store;
+  and no central log store beyond the Container Apps environment's Log
+  Analytics workspace;
 - a substitute for a production incident-response plan with contacts, on-call
   escalation, and audit. The demo exceptions are registered in
   [`threat-model.md`](threat-model.md) §7; every one of them must be replaced
-  before an internet-facing deployment.
+  before an internet-facing production deployment.
 
 ## 2. Health model
 
@@ -306,17 +315,35 @@ database you care about; it is not a migration rollback.
 **Symptom.** `http://localhost:8080/auth/...` or `/api/...` returns `502` after
 `auth` or `api` was recreated, while the service itself is healthy.
 
-**Diagnosis.** nginx uses a variable `proxy_pass` plus Docker's embedded DNS
-(`resolver 127.0.0.11 valid=10s`), so it re-resolves the service name instead of
-holding the old container IP. A short 502 is still possible while the name
-re-resolves or the upstream is starting. Confirm the upstreams:
+**Diagnosis.** The nginx server block is not baked into the image: it is
+rendered at container start by `/docker-entrypoint.d/30-upstream-config.sh` into
+`/tmp/conf.d/default.conf`, from `UPSTREAM_AUTH` (default `http://auth:8081`),
+`UPSTREAM_API` (default `http://api:8082`), and `NGINX_RESOLVER` (default
+`127.0.0.11`). The committed template is
+[`web/nginx/default.conf.template`](../web/nginx/default.conf.template). The
+proxy uses a variable `proxy_pass` plus the resolver, so nginx re-resolves the
+service name instead of holding the old container IP. A short 502 is still
+possible while the name re-resolves or the upstream is starting. Confirm the
+rendered configuration and the upstreams:
 
 ```powershell
+docker compose exec web sh -c 'cat /tmp/conf.d/default.conf'
+docker compose exec web sh -c 'echo $UPSTREAM_AUTH $UPSTREAM_API $NGINX_RESOLVER'
 docker compose ps auth api
 docker compose logs --tail 100 web
 Invoke-RestMethod http://localhost:8081/healthz
 Invoke-RestMethod http://localhost:8082/healthz
 ```
+
+`30-upstream-config.sh` validates each value before rendering. An absolute
+`http(s)` URL is required for the two upstreams, and the resolver must be a bare
+IPv4 address. A rejected value prints
+`30-upstream-config.sh: ERROR: ...` and exits non-zero, so nginx never starts; a
+missing render produces nginx's own `[emerg] ... open() "/tmp/conf.d/default.conf"
+failed` instead. Editing files under `/etc/nginx/conf.d` no longer does anything:
+that directory is not included, the image ships no server block there, and the
+rendered file lives on `/tmp`. Change the environment variables or the template,
+then recreate `web`.
 
 **Action.** Wait for `auth` and `api` to become healthy, then retry. If the 502
 persists while both are healthy, restart nginx:
@@ -328,7 +355,9 @@ docker compose restart web
 Do not replace the variable `proxy_pass` with a literal upstream: that
 reintroduces the stale-IP failure the resolver exists to prevent. If direct
 calls to 8081/8082 work but 8080 does not, the fault is in nginx or the `sme`
-network, not in the application.
+network, not in the application. In the Azure deployment the same renderer runs
+with the internal Container Apps FQDNs and `NGINX_RESOLVER=168.63.129.16`; see
+§9.
 
 ## 5. Key rotation
 
@@ -366,6 +395,17 @@ There is no rotation endpoint or automated overlap in the demo; treat this as a
 manual demo-scale procedure. Production must use a managed key service (KMS/HSM)
 with an audited rotation, overlapping key IDs, and revocation.
 
+In the Azure deployment the same key material lives on the `auth-keys` Azure
+Files share, mounted read-write at `/keys` on the `auth` Container App. The
+share, not the container filesystem, is the durable copy: a new revision keeps
+the same keys, and rolling `auth` back to the previous revision does not
+invalidate tokens. To rotate, remove the key files from the share and restart
+the auth revision; every issued token then fails validation once `api` refreshes
+its metadata cache. Deleting the share is a key-destroying action, and the share
+is the only backup unit until a managed KMS/HSM replaces it (ADR-020). Treat the
+share as a secret-bearing resource: it is reachable only through the platform
+mount today, but it has no separate backup or access policy of its own.
+
 ## 6. Rollback and restore
 
 | Action | How | What it affects |
@@ -374,11 +414,15 @@ with an audited rotation, overlapping key IDs, and revocation.
 | Clean demo reset | `docker compose down -v` then `docker compose up -d --build` | Destroys `mssql-data`, `auth-keys`, and `azurite-data` |
 | Restore SQL data | Not implemented in the demo | Out of scope; the volume is the only copy |
 
-CI and Azure Pipelines build each image once and tag it with the commit SHA
-(`${GITHUB_SHA}` / `$(Build.SourceVersion)`); promotion moves that tag or digest
-between environments and never rebuilds. The demo itself builds local
+CI and Azure Pipelines build each image once. The GitHub workflow builds and
+scans local images tagged with the commit SHA (`${GITHUB_SHA}`) but never
+pushes. Azure Pipelines tags the pushed image with `$(Build.SourceVersion)`,
+resolves the tag to an immutable digest, and promotes that digest between
+environments without rebuilding. In Compose the demo builds local
 `sme-demo-*:local` images, so a rollback means rebuilding from the previous
-commit or retagging a previously built image.
+commit or retagging a previously built image. In Azure, roll back the
+application with [`tools/deploy/rollback.sh`](../tools/deploy/rollback.sh); see
+§9.
 
 Two caveats:
 
@@ -401,12 +445,13 @@ restores, and a backup of the signing-key material.
 
 | Secret | Location | Notes |
 |--------|----------|-------|
-| Demo user password and OTP | `.env` (created from `.env.example`), or the Compose defaults | Published by design; never reuse outside a loopback demo |
-| SQL Server `sa` password | `.env` (`MSSQL_SA_PASSWORD`) | Used by the migrators and `db-grants` only |
-| Application DB passwords | `.env` (`SME_API_DB_PASSWORD`, `SME_AUTH_DB_PASSWORD`) | `db-grants` creates read/write-only logins with them |
-| Issuer mock API key | `.env` or the Compose default | Demo credential shared by `api` and `issuer-mock` |
-| Auth signing key | `auth-keys` volume | Generated at start-up; never in the repository or image |
-| Azurite account key | `docker-compose.yml` | The public emulator key; demo only |
+| Demo user password and OTP | `.env` (created from `.env.example`), or the Compose defaults; in Azure, the pipeline demo variables | Published by design; never reuse outside a loopback demo, and set `demoMode=false` for a real one |
+| SQL Server administrator password | Compose `.env` (`MSSQL_SA_PASSWORD`); Azure Key Vault secret `sql-admin-password`, supplied to the pipeline as the `sqlAdminPassword` variable-group secret | Used by the migrators and `db-grants` only; the Azure application logins cannot run DDL |
+| Application DB passwords | Compose `.env` (`SME_API_DB_PASSWORD`, `SME_AUTH_DB_PASSWORD`); Azure Key Vault `api-db-password` and `auth-db-password`, supplied as `SME_API_DB_PASSWORD` / `SME_AUTH_DB_PASSWORD` | `db-grants` (Compose) and the bootstrap pass of the migrator jobs (Azure) create the read/write-only logins with them |
+| Issuer mock API key | Compose `.env` or the Compose default; Azure Key Vault `issuer-api-key`, supplied as `ISSUER_API_KEY` | Demo credential shared by `api` and `issuer-mock` |
+| Auth signing key | Compose `auth-keys` volume; Azure `auth-keys` Azure Files share at `/keys` | Generated at start-up; never in the repository or image |
+| Azurite account key | `docker-compose.yml` | The public emulator key; Compose only |
+| Storage connection string | Azure Key Vault `storage-connection-string` | Shared-key authentication; the managed-identity migration is a follow-up |
 | CI/CD credentials | GitHub Actions secrets, Azure DevOps variable groups or Key Vault | See [`azure-pipelines.md`](azure-pipelines.md) |
 
 `.env` is gitignored and must not be committed. Images contain no secrets;
@@ -491,22 +536,155 @@ Logs stay on the console; there is no log exporter. EF Core query text and
 parameters are stripped from spans, and request bodies, authorization headers,
 phone numbers, and OTPs are never added as attributes.
 
-## 9. Limits of the demo
+## 9. Azure Container Apps deployment
+
+The Azure line is implemented in [`infra/main.bicep`](../infra/main.bicep) and
+[`tools/deploy/`](../tools/deploy/), and the pipeline stages call the same
+scripts. It has **not yet run against a real Azure subscription**; ADR-020's
+[Verification status](reference/adr/ADR-020-azure-hosting-and-test-deployment.md#verification-status)
+is the list to prove on the first Test deployment. The Compose procedures in
+§§2–8 still apply to local work; this section is the operator view of the Azure
+environment.
+
+### Deploying by hand
+
+[`tools/deploy/deploy.sh`](../tools/deploy/deploy.sh) is driven by environment
+variables; the header of the script is the authoritative contract. The required
+set is `ENVIRONMENT_NAME` (`test`, `uat`, or `prod`), `RESOURCE_GROUP`,
+`LOCATION`, `ACR_NAME`, `IMAGES_JSON`, `SQL_ADMIN_LOGIN`, `SQL_ADMIN_PASSWORD`,
+`SME_API_DB_PASSWORD`, `SME_AUTH_DB_PASSWORD`, `ORG_ID`, `DEMO_MODE`,
+`DEMO_USERNAME`, `DEMO_PASSWORD`, `DEMO_OTP`, and `ISSUER_API_KEY`. Optional:
+`NAME_PREFIX` (default `smedemo`), `DEPLOYMENT_NAME`, `SOURCE_COMMIT`,
+`BOOTSTRAP_SQL_PATH`, `DEPLOYMENT_RECORD_FILE`, and `SKIP_SMOKE`.
+
+`IMAGES_JSON` is usually the output of
+[`tools/deploy/resolve-digests.sh`](../tools/deploy/resolve-digests.sh) from the
+Build stage, or an inline copy of that document.
+
+```bash
+export ENVIRONMENT_NAME=test
+export RESOURCE_GROUP=rg-sme-demo-test
+export LOCATION=australiaeast
+export ACR_NAME=acrsmedemotest
+export IMAGES_JSON=./image-digests/images.json
+export SOURCE_COMMIT="$(git rev-parse HEAD)"
+export DEPLOYMENT_RECORD_FILE=./deployment-record-test.json
+# Supply these from the operator secret store / variable group, never from
+# shell history: SQL_ADMIN_LOGIN, SQL_ADMIN_PASSWORD, SME_API_DB_PASSWORD,
+# SME_AUTH_DB_PASSWORD, ISSUER_API_KEY, ORG_ID, DEMO_MODE, DEMO_USERNAME,
+# DEMO_PASSWORD, DEMO_OTP.
+bash tools/deploy/deploy.sh
+```
+
+The run requires a logged-in `az` session and a registry in the target resource
+group; `deploy.sh` refuses otherwise. It applies the template, runs
+`job-db-grants`, `job-migrate-api`, and `job-migrate-auth` in that order,
+restarts the apps' latest revisions now that the schema exists, waits for the
+five apps' latest revisions to be ready and `Running`, writes the deployment
+record, and then runs the public smoke test.
+
+The three database passwords must not contain a quote, semicolon, backslash,
+backtick, or whitespace: they are substituted into a T-SQL literal and a
+SqlClient connection string, and `deploy.sh` rejects a value that would corrupt
+either.
+
+### Inspecting an environment
+
+```bash
+# App and revision state
+az containerapp show --name smedemo-test-api --resource-group rg-sme-demo-test \
+  --query '{latest:properties.latestRevisionName,ready:properties.latestReadyRevisionName,running:properties.runningStatus}'
+az containerapp revision list --name smedemo-test-api \
+  --resource-group rg-sme-demo-test -o table
+
+# Application logs (JSON: auth and api set LOG_FORMAT=json)
+az containerapp logs show --name smedemo-test-web \
+  --resource-group rg-sme-demo-test --tail 100
+az containerapp logs show --name smedemo-test-api \
+  --resource-group rg-sme-demo-test --tail 100 --follow
+
+# One-shot jobs and their executions
+az containerapp job list --resource-group rg-sme-demo-test -o table
+az containerapp job execution list --name smedemo-test-job-migrate-api \
+  --resource-group rg-sme-demo-test -o table
+az containerapp job logs show --name smedemo-test-job-migrate-api \
+  --resource-group rg-sme-demo-test --execution <execution-id> --container migrator
+```
+
+The public entry point is the `webUrl` output of the deployment (also recorded
+in the deployment record). `auth`, `api`, and both mocks use internal ingress,
+so they are not reachable from a workstation; use the app logs, the revision
+state, and the web origin. The platform probes are the readiness authority:
+`api` readiness is `GET /readyz`, `auth` and the mocks use `GET /healthz`, and
+`web` uses `GET /`. The Container Apps environment sends container logs to the
+Log Analytics workspace created by the template.
+
+### Rolling back
+
+```bash
+tools/deploy/rollback.sh --environment test --resource-group rg-sme-demo-test
+```
+
+This lists revisions by creation time, activates the revision before the
+newest, and moves 100% of ingress traffic to it; `--app web` (repeatable)
+limits the work. It reverts the application only. Migrations are forward-only
+(ADR-010, recorded in the [ADR index](reference/adr/README.md)): the database
+stays on the newer schema, so the previous revision must still tolerate it.
+Auth signing keys stay on the `auth-keys` file share, so an auth rollback does
+not invalidate tokens. A rollback also does not undo a Bicep deployment that
+changed infrastructure; redeploy the previous template state if that is the
+cause.
+
+### The auth signing-key share
+
+`auth` reads and writes its RS256 keys at `/keys`, now backed by the
+`auth-keys` Azure Files share and mounted read-write on the auth app only. A new
+revision therefore keeps the same key set, and rolling auth back does not
+invalidate issued tokens. The open risk is ownership: the auth image runs as a
+non-root user, and Azure Files presents files as `root:root` unless the mount is
+configured otherwise. If the first deployment cannot write there, the
+documented fallback is to keep a single auth replica with no mount and accept
+that tokens reset whenever a revision starts; record that decision and open a
+follow-up. Deleting the share destroys the key material and invalidates every
+token.
+
+### First deployment checklist
+
+From ADR-020 §Verification status, in order:
+
+1. Bicep deploys cleanly to an empty resource group, including the Key Vault
+   secret references and both role assignments.
+2. The three migrator jobs exit 0, the application logins can write their own
+   database, and a second run of the jobs is a no-op.
+3. `api`, `auth`, `web`, and both mocks become healthy, and the platform
+   readiness probe on `/readyz` passes.
+4. The Azure Files mount at `/keys` is writable by the non-root auth user, or
+   the fallback above is applied and recorded.
+5. `environment-smoke.sh` passes against the public web origin, and a rollback
+   to the previous revision works.
+6. The registry-side Trivy scan of the promoted digests passes in the same
+   pipeline run.
+
+Record the evidence (deployment record, smoke output, revision names, digests)
+before UAT is used.
+
+## 10. Limits of the demo
 
 | Limit | Demo behaviour | A production deployment must |
 |-------|----------------|------------------------------|
 | Rate limiting | In-memory, per process, per instance; a restart resets every window | Use a shared limiter or size budgets for the replica count, with central quotas and alerting |
 | Telemetry | In-memory, per process; no collector, no sampling, no aggregation | Add a collector, a sampling policy, retention, and per-environment resource attributes |
-| Availability | One replica of each service on one host | Multiple replicas, health-gated rollout, and an ingress that removes unhealthy instances |
+| Availability | One replica of each service; one Compose host and one Container Apps replica per app | Multiple replicas, health-gated rollout, and an ingress that removes unhealthy instances |
 | State | In-memory challenges, readiness cache, and rate-limit windows | Shared caches/stores with TTL and a documented failure mode |
 | Identity | Demo issuer, fixed OTP, published password | Real IdP, MFA, revocation/refresh, and no demo mode |
-| Keys | Local `auth-keys` volume, manual rotation | KMS/HSM, audited rotation with overlap, and revocation |
-| Data | Named volumes, no backups | Managed database with automated backups, PITR, and tested restores |
-| Transport | Plain HTTP on loopback | TLS at the edge, HSTS, and no direct host ports |
-| Logs | Console only, JSON or simple | Central log store, retention, alerts, and an audit trail |
+| Keys | Compose `auth-keys` volume or the Azure Files share, manual rotation | KMS/HSM, audited rotation with overlap, and revocation |
+| Data | Compose named volumes; Azure SQL with no backup/restore exercise | Managed database with automated backups, PITR, and tested restores |
+| Transport | Compose: plain HTTP on loopback. Azure: HTTPS at the platform ingress, no WAF or custom domain | TLS at the edge, HSTS, WAF, and no direct host ports |
+| Logs | Console only in Compose; Container Apps log analytics in Azure | Central log store with retention, alerts, and an audit trail |
 
 The same limitations are recorded as decisions in
-[ADR-017](reference/adr/ADR-017-per-instance-rate-limiting-and-readiness.md) and
-[ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md). If an
+[ADR-017](reference/adr/ADR-017-per-instance-rate-limiting-and-readiness.md),
+[ADR-018](reference/adr/ADR-018-observability-and-supply-chain.md), and
+[ADR-020](reference/adr/ADR-020-azure-hosting-and-test-deployment.md). If an
 incident needs more than the steps in this runbook, the demo is being used as a
 production system; fix the deployment gap before continuing.

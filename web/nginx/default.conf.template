@@ -1,5 +1,17 @@
+# Server block for the web image.
+#
+# This is a template, not a ready-to-use nginx config: it is rendered to
+# /tmp/conf.d/default.conf by /docker-entrypoint.d/30-upstream-config.sh when
+# the container starts. The proxy upstreams and the DNS resolver differ between
+# Docker Compose (service names on Docker's embedded DNS) and the Azure
+# Container Apps deployment (environment-specific FQDNs and the platform
+# resolver), so the image cannot ship a fixed server block.
+#
+# Only the @...@ placeholders below are substituted. nginx runtime variables
+# such as $host and $request_uri are deliberately left untouched; the renderer
+# uses a literal sed replacement instead of envsubst for exactly that reason.
 server {
-    # The runtime image is the unprivileged nginx variant, so it listens on an
+    # The image runs as the unprivileged nginx user, so it listens on an
     # unprivileged port. Compose publishes it as 127.0.0.1:8080.
     listen 8080;
     server_name _;
@@ -19,15 +31,20 @@ server {
     gzip_min_length 1024;
     gzip_types text/plain text/css application/javascript application/json image/svg+xml;
 
-    # Docker's embedded DNS. Without a resolver, nginx resolves upstream names
-    # once at start-up and keeps the stale IP after a container is recreated.
-    resolver 127.0.0.11 valid=10s ipv6=off;
+    # DNS resolver for the proxy_pass variables below. Compose uses Docker's
+    # embedded DNS; Azure Container Apps supplies its own. Without a resolver,
+    # nginx resolves an upstream once at start-up and keeps the stale IP after
+    # the container behind the name is recreated.
+    resolver @NGINX_RESOLVER@ valid=10s ipv6=off;
     resolver_timeout 5s;
 
     # The browser only talks to this origin. Both APIs are proxied with their
-    # original paths, so /auth/* -> auth:8081/auth/* and /api/* -> api:8082/api/*.
+    # original paths, so /auth/* -> <auth upstream>/auth/* and
+    # /api/* -> <api upstream>/api/*. proxy_pass uses a variable, so nginx
+    # defers name resolution to request time and `nginx -t` does not need the
+    # upstream to be resolvable or reachable.
     location /auth/ {
-        set $auth_upstream http://auth:8081;
+        set $auth_upstream @UPSTREAM_AUTH@;
         proxy_pass $auth_upstream$request_uri;
         proxy_http_version 1.1;
         proxy_connect_timeout 5s;
@@ -39,7 +56,7 @@ server {
     }
 
     location /api/ {
-        set $api_upstream http://api:8082;
+        set $api_upstream @UPSTREAM_API@;
         proxy_pass $api_upstream$request_uri;
         proxy_http_version 1.1;
         proxy_connect_timeout 5s;

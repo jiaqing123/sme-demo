@@ -641,11 +641,16 @@ docker compose up -d --force-recreate web
 
 `/config.js` is served with `Cache-Control: no-store`; `/assets/*` is immutable
 because Vite fingerprints those files; `/index.html` and the SPA fallback are
-`no-cache`. The image also proxies with Docker's embedded DNS
-(`resolver 127.0.0.11`), so recreating `auth` or `api` does not leave nginx
-pointing at a stale container IP. auth's own liveness probe remains `/healthz`
-on 8081 and api's Compose healthcheck is `/readyz` on 8082; the proxied
-application routes under `/auth/` and `/api/` are forwarded unchanged.
+`no-cache`. The nginx server block is rendered at container start from
+`web/nginx/default.conf.template` into `/tmp/conf.d/default.conf` by
+`30-upstream-config.sh`, using `UPSTREAM_AUTH` (default `http://auth:8081`),
+`UPSTREAM_API` (default `http://api:8082`), and `NGINX_RESOLVER` (default
+`127.0.0.11`, Docker's embedded DNS). That keeps the Compose stack unchanged
+while the Azure deployment supplies environment-specific FQDNs and the platform
+resolver; recreating `auth` or `api` does not leave nginx pointing at a stale
+container IP. auth's own liveness probe remains `/healthz` on 8081 and api's
+Compose healthcheck is `/readyz` on 8082; the proxied application routes under
+`/auth/` and `/api/` are forwarded unchanged.
 
 Session behaviour: the token is kept in `sessionStorage` and attached by a
 single fetch wrapper. An authenticated 401 clears the session and redirects to
@@ -715,8 +720,13 @@ factories can run with independent settings in the same test run.
 
 The Azure Pipelines equivalent — the same Build gates plus the Test, UAT, and
 Production deployment stages — is described in
-[`azure-pipelines.md`](azure-pipelines.md). GitHub Actions stays the fast
-pull-request loop; Azure Pipelines is the formal release path.
+[`azure-pipelines.md`](azure-pipelines.md). Both CI systems also validate the
+deployment assets without an Azure subscription: `az bicep build --file
+infra/main.bicep --stdout` and `bash -n` over `tools/deploy/*.sh` and
+`web/nginx/*.sh`. The scripts it runs are
+[`deploy.sh`](../tools/deploy/deploy.sh) and
+[`rollback.sh`](../tools/deploy/rollback.sh); GitHub Actions stays the fast
+pull-request loop, and Azure Pipelines is the formal release path.
 
 ### Format gate
 
@@ -1152,7 +1162,7 @@ reset. Do not use it on a database you care about.
 | `web` is healthy but `/config.js` returns 404 | the `/tmp` tmpfs is missing, or the entrypoint did not run `40-runtime-config.sh` | `docker compose exec web sh -c 'ls -l /tmp/config.js'` and `docker compose logs web`; recreate web (`docker compose up -d --force-recreate web`) and confirm the Compose `tmpfs: /tmp` entry is present |
 | A request larger than 1 MiB returns `413` through the real port but not in `WebApplicationFactory` tests | TestServer does not enforce Kestrel limits; the real host enforces `MAX_REQUEST_BODY_BYTES` (default 1 MiB) and nginx enforces `client_max_body_size 1m` | reproduce against the container, not the test host; raise `MAX_REQUEST_BODY_BYTES` and the nginx limit together if a larger body is legitimate |
 | A service fails to write a file that used to work | the root filesystem is read-only; only `/tmp` and mounted volumes are writable | write scratch data under `/tmp` (or add a volume deliberately); confirm with `docker inspect --format '{{.HostConfig.ReadonlyRootfs}}'`; the Visual Studio debug override is the only relaxed path |
-| nginx logs `can not modify /etc/nginx/conf.d/default.conf` | the config files are root-owned and the runtime is read-only and unprivileged; the stock image entrypoint tries to rewrite them | expected and harmless: the committed configuration is already correct, and the line does not stop nginx from starting |
+| `nginx: [emerg] open() "/tmp/conf.d/default.conf" failed` or `web` exits at start | the server-block renderer ran but produced nothing; `UPSTREAM_AUTH`/`UPSTREAM_API`/`NGINX_RESOLVER` were rejected, or the `/tmp` tmpfs is missing | `docker compose logs web`; the renderer prints `30-upstream-config.sh: ERROR: ...` for a bad value; confirm the Compose `tmpfs: /tmp` entry and recreate web |
 | `docker compose build web` fails on `npm ci` | no network during the image build | connect to the registry, or run `cd web; npm ci` locally first to warm the npm cache |
 
 ## What is not here yet
@@ -1161,8 +1171,10 @@ The web UI is implemented for sign-in with OTP, the card wallet with artwork,
 the card summary plus its paginated, date-grouped transaction list (pending
 badges, `Load more`, retry on append failures, wallet scroll restoration), and
 the profile page. CI builds and tests both halves on every push and pull request.
-A real deployment and a real identity provider are not here yet (requirements
-§10.6); the demo runs from Compose on one machine. The auth
+A real identity provider is not here yet (requirements §10.6); the demo runs
+from Compose on one machine. The Azure deployment is implemented (Container
+Apps; see [`azure-pipelines.md`](azure-pipelines.md) and ADR-020) but has not
+yet been executed against Azure. The auth
 issuer, the resource API, and the mock issuer are implemented with their own
 databases, migrations, idempotent scripts, and tests. The mock SMS provider is a
 stateless stand-in with its own contract tests. The API pulls transactions from

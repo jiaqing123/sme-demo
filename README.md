@@ -66,8 +66,11 @@ today:
   in-image .NET probe. `web` (nginx) is the documented exception and still has a
   shell.
 
-Not implemented yet: a real deployment and a real identity provider
-(requirements §3 and §10.6; the demo runs locally from Compose).
+Not implemented yet: a real identity provider (requirements §3 and §10.6; the
+demo runs locally from Compose). The Azure deployment is implemented
+(Container Apps, `infra/`, `tools/deploy/`, `azure-pipelines.yml`) but has not
+yet been executed against Azure; ADR-020 records the decision and the
+verification status.
 
 ## Reference baseline
 

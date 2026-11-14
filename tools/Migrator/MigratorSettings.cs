@@ -6,6 +6,7 @@ internal sealed record MigratorSettings(
     string ConnectionString,
     string DatabaseName,
     string MigrationsPath,
+    string? BootstrapSqlPath,
     int MaxWaitAttempts,
     TimeSpan WaitTimeout)
 {
@@ -28,6 +29,12 @@ internal sealed record MigratorSettings(
 
         var migrationsPath = Environment.GetEnvironmentVariable("MIGRATIONS_PATH") ?? "/app/migrations";
 
+        var bootstrapSqlPath = Environment.GetEnvironmentVariable("BOOTSTRAP_SQL");
+        if (string.IsNullOrWhiteSpace(bootstrapSqlPath))
+        {
+            bootstrapSqlPath = null;
+        }
+
         var maxWaitAttempts = int.TryParse(Environment.GetEnvironmentVariable("DB_MAX_ATTEMPTS"), out var attempts)
             ? attempts
             : 60;
@@ -37,6 +44,12 @@ internal sealed record MigratorSettings(
                 ? seconds
                 : 120);
 
-        return new MigratorSettings(connectionString, builder.InitialCatalog, migrationsPath, maxWaitAttempts, waitTimeout);
+        return new MigratorSettings(
+            connectionString,
+            builder.InitialCatalog,
+            migrationsPath,
+            bootstrapSqlPath,
+            maxWaitAttempts,
+            waitTimeout);
     }
 }

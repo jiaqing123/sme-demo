@@ -199,4 +199,4 @@ that relaxation in the CLI stack.
   [`docker-compose.yml`](../../../docker-compose.yml),
   [`docker-compose.vs.debug.yml`](../../../docker-compose.vs.debug.yml),
   [`web/Dockerfile`](../../../web/Dockerfile), and
-  [`web/nginx/default.conf`](../../../web/nginx/default.conf)
+  [`web/nginx/default.conf.template`](../../../web/nginx/default.conf.template)
