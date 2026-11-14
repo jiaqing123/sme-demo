@@ -263,7 +263,7 @@ stages:
           - bash: |
               set -euo pipefail
               shopt -s nullglob
-              scripts=(tools/deploy/*.sh web/nginx/*.sh)
+              scripts=(tools/deploy/*.sh tools/setup/*.sh web/nginx/*.sh)
               [ "${#scripts[@]}" -gt 0 ] || { echo "No deployment shell scripts found" >&2; exit 1; }
               for script in "${scripts[@]}"; do
                 bash -n "$script"
