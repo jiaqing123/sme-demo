@@ -1,5 +1,5 @@
-# Gitleaks configuration for the working-tree scan in CI
-# (`gitleaks detect --source . --no-git --redact --exit-code 1`).
+# Gitleaks configuration for the full-history scan in CI
+# (`gitleaks detect --source . --redact --exit-code 1`).
 title = "sme-demo gitleaks configuration"
 
 [extend]
