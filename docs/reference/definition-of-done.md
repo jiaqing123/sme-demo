@@ -99,14 +99,17 @@ release checklist are in [`../delivery.md`](../delivery.md).
       number, and no PAN/CVV/PIN. Test fixtures use obviously fictional values.
 - [ ] The dependency scan is clean:
       `python3 tools/smoke/check-vulnerabilities.py` after a Release build. It
-      scans every project under `src/`, `tests/`, and `tools/` (currently 16),
+      scans every project under `src/`, `tests/`, and `tools/` (currently 17),
       and fails on any advisory, command error, or unparseable output. Raw
       `dotnet list package --vulnerable` is not a gate because it exits 0 even
       when it reports findings.
 - [ ] The secret scan is clean with the pinned gitleaks 8.30.1 release:
-      `gitleaks detect --source . --no-git --redact --config .gitleaks.toml --exit-code 1`.
-      `.gitleaks.toml` allowlists only the documented Azurite emulator key and
-      local build/tool caches. The download URL, checksum, and local setup are in
+      `gitleaks detect --source . --redact --config .gitleaks.toml --exit-code 1`.
+      CI checks out the full history so every commit is scanned; on a shallow
+      local clone run `git fetch --unshallow` first, or narrow the check with
+      `--no-git` to the working tree. `.gitleaks.toml` allowlists only the
+      documented Azurite emulator key and local build/tool caches. The download
+      URL, checksum, and local setup are in
       [`../development.md`](../development.md#dependency-and-secret-scans).
 - [ ] Every new demo shortcut is registered in
       [`../threat-model.md`](../threat-model.md) §7 and

@@ -16,7 +16,7 @@ three loops.
 
 | Loop | Trigger | What runs | Output |
 |---|---|---|---|
-| **Every change** | Pull request or push to `main` | The five CI jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): .NET build/tests/format/OpenAPI/migrations/vulnerability/secret scan, web build/tests, Compose validation, image build + SBOM + Trivy, Compose smoke | A reviewed commit on `main` that is a release candidate; never a deployment by itself |
+| **Every change** | Pull request or push to `main` | The five CI jobs in [`.github/workflows/ci.yml`](../.github/workflows/ci.yml): .NET build/tests/format/OpenAPI/migrations/vulnerability/full-history secret scan, web build/tests, Compose validation, image build + SBOM + Trivy, Compose smoke | A reviewed commit on `main` that is a release candidate; never a deployment by itself |
 | **Every week** | Monday Dependabot schedule; Tuesday 03:00 UTC security scan | Grouped dependency PRs, and the scheduled rebuild-and-scan workflow [`.github/workflows/security-scan.yml`](../.github/workflows/security-scan.yml) | Updated dependencies and a fresh vulnerability answer even when no code changed |
 | **Every release** | On demand, or a fixed window agreed with the demo audience | Promotion of an already-gated image digest, environment deployment, environment smoke, recorded evidence | A deployed, reproducible version that can be rolled back by digest |
 

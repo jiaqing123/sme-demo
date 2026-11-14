@@ -172,6 +172,7 @@ builder.Services.AddOpenApi(openApi =>
 {
     openApi.AddDocumentTransformer<BearerSecuritySchemeTransformer>();
     openApi.AddDocumentTransformer<ProblemDetailsContractTransformer>();
+    openApi.AddDocumentTransformer<ServerDocumentTransformer>();
     openApi.AddOperationTransformer<EndpointSecurityTransformer>();
     openApi.AddOperationTransformer<ProblemDetailsContractTransformer>();
 });

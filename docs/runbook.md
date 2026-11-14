@@ -410,7 +410,8 @@ restores, and a backup of the signing-key material.
 | CI/CD credentials | GitHub Actions secrets, Azure DevOps variable groups or Key Vault | See [`azure-pipelines.md`](azure-pipelines.md) |
 
 `.env` is gitignored and must not be committed. Images contain no secrets;
-gitleaks scans the working tree in CI.
+gitleaks scans the full git history in CI (full checkout), and a local scan
+covers history too unless the clone is shallow.
 
 ### Published credentials are demo-only
 

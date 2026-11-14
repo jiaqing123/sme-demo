@@ -23,19 +23,16 @@ public sealed class IssuerSyncService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly InfrastructureOptions _options;
-    private readonly IIssuerClient _issuer;
     private readonly ILogger<IssuerSyncService> _logger;
     private readonly SemaphoreSlim _roundGate = new(1, 1);
 
     public IssuerSyncService(
         IServiceScopeFactory scopeFactory,
         InfrastructureOptions options,
-        IIssuerClient issuer,
         ILogger<IssuerSyncService> logger)
     {
         _scopeFactory = scopeFactory;
         _options = options;
-        _issuer = issuer;
         _logger = logger;
     }
 
@@ -164,12 +161,16 @@ public sealed class IssuerSyncService : BackgroundService
     {
         try
         {
-            var transactions = await _issuer.GetTransactionsAsync(cardId, cancellationToken);
-            var records = ValidateAndMap(cardId, transactions);
-
+            // The typed issuer client is transient, so the singleton worker must
+            // resolve it from a scope per card. The same scope owns the DbContext
+            // and store used to persist that card's result.
             await using var scope = _scopeFactory.CreateAsyncScope();
+            var issuer = scope.ServiceProvider.GetRequiredService<IIssuerClient>();
             var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
             var store = scope.ServiceProvider.GetRequiredService<ITransactionStore>();
+
+            var transactions = await issuer.GetTransactionsAsync(cardId, cancellationToken);
+            var records = ValidateAndMap(cardId, transactions);
 
             // Validate the whole card before writing anything: one bad record
             // must not leave half a card in the feed.

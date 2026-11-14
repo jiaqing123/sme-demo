@@ -4,6 +4,12 @@
     "title": "SmeDemo.Api | v1",
     "version": "1.0.0"
   },
+  "servers": [
+    {
+      "url": "http://localhost:8082",
+      "description": "Configured public base URL (`PUBLIC_BASE_URL`)."
+    }
+  ],
   "paths": {
     "/healthz": {
       "get": {

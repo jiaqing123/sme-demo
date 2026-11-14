@@ -77,7 +77,8 @@ The `DotNet` job runs on `ubuntu-latest` and performs:
 7. idempotent migration SQL regeneration and `diff` against `db/migrations/`
 8. the MediatR/AutoMapper removal guard
 9. `python3 tools/smoke/check-vulnerabilities.py`
-10. a pinned, checksum-verified gitleaks working-tree scan
+10. a pinned, checksum-verified gitleaks full-history scan (checkout uses
+    `fetchDepth: 0`)
 
 The SDK is `dotnetVersion: 10.0.404`, kept in step with
 [`global.json`](../global.json); the GitHub workflow reads that file directly
@@ -318,7 +319,7 @@ curl -fsSL -o /tmp/gitleaks.tar.gz \
 echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  /tmp/gitleaks.tar.gz" \
   | sha256sum --check --strict
 tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
-/tmp/gitleaks detect --source . --no-git --redact --config .gitleaks.toml --exit-code 1
+/tmp/gitleaks detect --source . --redact --config .gitleaks.toml --exit-code 1
 
 docker compose config -q
 docker compose up -d --build mssql azurite db-migrator db-migrator-auth \
@@ -337,8 +338,8 @@ timings with warm base images:
 - `docker compose up` to a healthy stack: 4 min 39 s
 - smoke script: 5.5 s
 - teardown: 17 s
-- vulnerability scan of 16 projects: 77 s
-- gitleaks scan: 2 s
+- vulnerability scan of 17 projects: 77 s
+- full-history gitleaks scan: 7 s
 
 Cold GitHub or Azure agents will be slower because base images and NuGet
 packages are not cached.
@@ -356,10 +357,11 @@ packages are not cached.
 - **Vulnerabilities** are scanned with `dotnet list package --vulnerable
   --include-transitive --format json`. The wrapper is required because the raw
   command exits 0 even when it reports findings.
-- **Secrets** are scanned with gitleaks 8.30.1, downloaded from a pinned URL and
-  verified against a SHA-256 checksum. `.gitleaks.toml` allowlists the
-  documented Azurite emulator key and generated build output; it does not
-  disable the default rule set.
+- **Secrets** are scanned with gitleaks 8.30.1 over the full git history,
+  downloaded from a pinned URL and verified against a SHA-256 checksum. The
+  pipeline checks out with `fetchDepth: 0` so the scan covers every commit.
+  `.gitleaks.toml` allowlists the documented Azurite emulator key and generated
+  build output; it does not disable the default rule set.
 - **Images** are scanned with Trivy 0.76.2 when they are built locally
   (`publishImages=false`), also pinned and checksum-verified. Fixable `HIGH` and
   `CRITICAL` findings fail the build; `--ignore-unfixed` also filters unfixed

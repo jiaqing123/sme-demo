@@ -71,7 +71,10 @@ stages:
           vmImage: ubuntu-latest
         timeoutInMinutes: 30
         steps:
+          # Full history so the secret scan covers every commit, not only the
+          # working tree. The other jobs keep the shallow default.
           - checkout: self
+            fetchDepth: 0
 
           - task: UseDotNet@2
             displayName: Set up .NET
@@ -157,8 +160,8 @@ stages:
           - script: python3 tools/smoke/check-vulnerabilities.py
             displayName: Scan dependencies for known vulnerabilities
 
-          # Pinned and checksum-verified; --no-git scans the shallow checkout's
-          # working tree rather than the git history.
+          # Pinned and checksum-verified. The checkout above fetches full
+          # history, so gitleaks scans every commit, not only the working tree.
           - bash: |
               set -euo pipefail
               archive="$(Agent.TempDirectory)/gitleaks.tar.gz"
@@ -167,7 +170,7 @@ stages:
               echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  ${archive}" \
                 | sha256sum --check --strict
               tar -xzf "$archive" -C "$(Agent.TempDirectory)" gitleaks
-              "$(Agent.TempDirectory)/gitleaks" detect --source . --no-git --redact \
+              "$(Agent.TempDirectory)/gitleaks" detect --source . --redact \
                 --config .gitleaks.toml --exit-code 1
             displayName: Scan for secrets
 

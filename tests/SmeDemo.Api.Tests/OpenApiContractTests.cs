@@ -120,6 +120,26 @@ public sealed class OpenApiContractTests
     }
 
     [TestMethod]
+    public async Task Document_DeclaresTheConfiguredPublicBaseUrlAsItsOnlyServer()
+    {
+        using var factory = new ApiTestFactory();
+        using var client = factory.CreateClient();
+
+        using var document = JsonDocument.Parse(await client.GetStringAsync("/openapi/v1.json"));
+        var servers = document.RootElement.GetProperty("servers").EnumerateArray().ToArray();
+
+        Assert.AreEqual(1, servers.Length, "The document must declare exactly one server.");
+        Assert.AreEqual(
+            factory.Options.PublicBaseUrl,
+            servers[0].GetProperty("url").GetString(),
+            "The server URL must be the configured public base URL.");
+        Assert.AreEqual("http://localhost:8082", servers[0].GetProperty("url").GetString());
+        Assert.IsFalse(
+            string.IsNullOrWhiteSpace(servers[0].GetProperty("description").GetString()),
+            "The server must explain that the URL comes from configuration.");
+    }
+
+    [TestMethod]
     public async Task CommittedDocument_MatchesTheDocumentServedAtRuntime()
     {
         using var factory = new ApiTestFactory();
@@ -129,22 +149,14 @@ public sealed class OpenApiContractTests
         var committedJson = await File.ReadAllTextAsync(
             Path.Combine(FindRepositoryRoot(), "openapi", "v1.json"));
 
-        // The runtime endpoint derives a `servers` entry from the request; the
-        // build-time document has no request, so the host is the only expected
-        // difference. Everything a client generates code from must match.
+        // Both documents are produced from the same endpoint metadata and
+        // ApiOptions, including the explicit `servers` entry, so they must be
+        // byte-for-byte equivalent as JSON values.
         Assert.IsTrue(
             JsonNode.DeepEquals(
-                Normalize(runtimeJson),
-                Normalize(committedJson)),
+                JsonNode.Parse(runtimeJson),
+                JsonNode.Parse(committedJson)),
             "openapi/v1.json does not match the served document. Rebuild SmeDemo.Api and commit the regenerated file.");
-    }
-
-    private static JsonNode Normalize(string json)
-    {
-        var node = JsonNode.Parse(json)?.AsObject()
-            ?? throw new InvalidOperationException("The OpenAPI document could not be parsed.");
-        node.Remove("servers");
-        return node;
     }
 
     private static JsonElement GetOperation(JsonElement root, string route)

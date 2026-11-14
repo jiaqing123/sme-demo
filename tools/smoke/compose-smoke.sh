@@ -110,6 +110,49 @@ printf 'Compose smoke test: auth=%s api=%s org=%s\n' \
 wait_for_probe "auth liveness" "$AUTH_BASE_URL" "/healthz"
 wait_for_probe "api readiness" "$API_BASE_URL" "/readyz"
 
+# The 200 above only proves the aggregate says ready. Check the body so a probe
+# that was accidentally stubbed or dropped from the composition fails the smoke
+# run instead of passing on a status code alone.
+readiness_status="$(request GET "$API_BASE_URL/readyz" "" "" "$tmp_dir/readyz.json")"
+readiness_detail="$(
+    python3 - "$tmp_dir/readyz.json" <<'PY'
+import json
+import sys
+
+expected = ["database", "blob-storage", "auth-metadata"]
+body = None
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        body = json.load(handle)
+    checks = body.get("checks") if isinstance(body, dict) else []
+    names = [check.get("name") for check in checks] if isinstance(checks, list) else []
+    ready = (
+        isinstance(body, dict)
+        and body.get("status") == "ready"
+        and names == expected
+        and all(check.get("status") == "ready" for check in checks)
+    )
+except Exception:
+    ready = False
+    names = []
+
+if ready:
+    print("ok")
+elif isinstance(body, dict):
+    print(f"status={body.get('status')!r} checks={names}")
+else:
+    print("invalid readiness body")
+PY
+)"
+
+if [ "$readiness_status" = "200" ] && [ "$readiness_detail" = "ok" ]; then
+    pass "GET /readyz reported status=ready with database, blob-storage and auth-metadata all ready"
+else
+    fail "GET /readyz did not report all three probes ready (status=${readiness_status:-<no response>} detail=${readiness_detail:-<empty>})"
+    cat "$tmp_dir/readyz.json" 2>/dev/null || true
+    printf '\n'
+fi
+
 login_body="$(
     DEMO_USERNAME="$DEMO_USERNAME" DEMO_PASSWORD="$DEMO_PASSWORD" python3 - <<'PY'
 import json

@@ -118,6 +118,7 @@ internal sealed class SyncTestHost : IAsyncDisposable
         services.AddLogging();
         services.AddDbContext<AppDbContext>(db => db.UseInMemoryDatabase(databaseName));
         services.AddSingleton(options);
+        services.AddSingleton<IIssuerClient>(issuer);
         services.AddSingleton<ITransactionStore>(store);
 
         var provider = services.BuildServiceProvider();
@@ -132,7 +133,6 @@ internal sealed class SyncTestHost : IAsyncDisposable
         var service = new IssuerSyncService(
             provider.GetRequiredService<IServiceScopeFactory>(),
             options,
-            issuer,
             NullLogger<IssuerSyncService>.Instance);
 
         return new SyncTestHost(provider, issuer, store, service);

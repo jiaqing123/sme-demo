@@ -85,7 +85,7 @@ that relaxation in the CLI stack.
   (`--severity HIGH,CRITICAL --ignore-unfixed --exit-code 1`). CycloneDX SBOMs
   are generated for the same images before the gate and uploaded as build
   artefacts.
-- The existing gates stay: gitleaks scans the working tree with a pinned,
+- The existing gates stay: gitleaks scans the full git history with a pinned,
   checksum-verified binary, and `tools/smoke/check-vulnerabilities.py` scans the
   NuGet graph for advisories. Trivy is added because the image, not the NuGet
   graph, is what is promoted; OS packages and published application libraries

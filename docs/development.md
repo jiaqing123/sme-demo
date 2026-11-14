@@ -524,6 +524,9 @@ The document is produced from endpoint metadata. `BearerSecuritySchemeTransforme
 declares the `Bearer` scheme, and `EndpointSecurityTransformer` adds the
 requirement to every operation that is not explicitly `AllowAnonymous`;
 `/healthz` and `/readyz` are therefore documented without a security requirement.
+`ServerDocumentTransformer` writes a single `servers` entry from
+`PUBLIC_BASE_URL`, so a generated client does not have to guess the host; the
+committed document carries the build-time default `http://localhost:8082`.
 Every `/api/v1` operation also declares the `429` response, and `/readyz`
 declares both its `200` and `503` readiness bodies.
 
@@ -539,10 +542,10 @@ diff, so a route or contract change cannot ship without the regenerated document
 
 At runtime, `GET /openapi/v1.json` is mapped only in Development
 (`app.MapOpenApi().AllowAnonymous()`), so it is not part of production
-behaviour. The served document differs from the committed one only by the
-`servers` entry derived from the request;
+behaviour. The served document uses the same explicit `servers` entry, so it
+matches the committed file exactly;
 [`OpenApiContractTests`](../tests/SmeDemo.Api.Tests/OpenApiContractTests.cs)
-normalises that field and compares everything else.
+compares the two documents, including `servers`, and fails if either drifts.
 
 To consume the contract, point a client generator at the committed file, or at
 the Development endpoint while the API is running. Both describe the same
@@ -674,7 +677,7 @@ on demand. It has five jobs:
 
 | Job | Runner / timeout | What it does |
 |-----|------------------|--------------|
-| `dotnet` | ubuntu, 20 min | checkout; set up .NET from `global.json` (`10.0.404`, `latestFeature`); `dotnet tool restore`; `dotnet build SmeDemo.slnx --configuration Release`; `dotnet test SmeDemo.slnx --configuration Release --no-build`; `dotnet format SmeDemo.slnx --verify-no-changes`; verify `openapi/v1.json` exists and `git diff --exit-code -- openapi/` (the Release build regenerates it); pending-model checks for the API and auth DbContexts; generated-SQL diff for both; removed-package guard (MediatR/AutoMapper); `python3 tools/smoke/check-vulnerabilities.py`; gitleaks secret scan. |
+| `dotnet` | ubuntu, 20 min | checkout; set up .NET from `global.json` (`10.0.404`, `latestFeature`); `dotnet tool restore`; `dotnet build SmeDemo.slnx --configuration Release`; `dotnet test SmeDemo.slnx --configuration Release --no-build`; `dotnet format SmeDemo.slnx --verify-no-changes`; verify `openapi/v1.json` exists and `git diff --exit-code -- openapi/` (the Release build regenerates it); pending-model checks for the API and auth DbContexts; generated-SQL diff for both; removed-package guard (MediatR/AutoMapper); `python3 tools/smoke/check-vulnerabilities.py`; gitleaks full-history secret scan (checkout uses `fetch-depth: 0`). |
 | `web` | ubuntu, 15 min | Node 22, `npm ci`, `npm run build`, `npm test`. |
 | `compose` | ubuntu, 5 min | copy `.env.example` to `.env`, then `docker compose config -q`. |
 | `images` | ubuntu, 50 min | build six images from the repository root: api, auth, web, sms-mock, issuer-mock, and migrator, each tagged with `${GITHUB_SHA}`; generate one CycloneDX SBOM per image into `$RUNNER_TEMP/sbom` and upload them as artifact `sboms`; scan each image with Trivy 0.76.2 for fixable HIGH/CRITICAL vulnerabilities (`--severity HIGH,CRITICAL --ignore-unfixed --timeout 15m --exit-code 1`); fail on any build or scan error. |
@@ -759,13 +762,15 @@ SHA-256 before it runs:
 The scan command is:
 
 ```bash
-gitleaks detect --source . --no-git --redact --config .gitleaks.toml --exit-code 1
+gitleaks detect --source . --redact --config .gitleaks.toml --exit-code 1
 ```
 
-`--no-git` scans the working tree because `actions/checkout` fetches a shallow
-history. `.gitleaks.toml` extends the default rule set and allowlists only the
-Azurite emulator's documented well-known key plus local build/tool caches
-(`.vs/`, `.tmp-tools/`, `bin/`, `obj/`, `node_modules/`).
+CI checks out the **full history** (`fetch-depth: 0`), so the scan covers every
+commit, not just the working tree. On a shallow clone, run
+`git fetch --unshallow` first, or use `--no-git` to scan only the working tree (a
+narrower, local-only check). `.gitleaks.toml` extends the default rule set and
+allowlists only the Azurite emulator's documented well-known key plus local
+build/tool caches (`.vs/`, `.tmp-tools/`, `bin/`, `obj/`, `node_modules/`).
 
 **Container images.** The NuGet scan covers the application dependency graph;
 the `images` job scans the artefact that is actually promoted. After building
@@ -979,11 +984,13 @@ from <https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1>, verify its
 checksum against the release, then run the same command:
 
 ```bash
-gitleaks detect --source . --no-git --redact --config .gitleaks.toml --exit-code 1
+gitleaks detect --source . --redact --config .gitleaks.toml --exit-code 1
 ```
 
-CI uses the Linux x64 asset and SHA-256 listed above; use the matching asset for
-your operating system locally.
+CI uses the Linux x64 asset and SHA-256 listed above and fetches the full
+history; use the matching asset for your operating system locally. A shallow
+clone must be unshallowed first, or the command narrowed with `--no-git` to the
+working tree only.
 
 ### What runs only in CI today
 
